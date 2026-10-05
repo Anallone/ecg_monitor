@@ -32,23 +32,23 @@ def cmd_gui(args):
     from config import MODEL_DIR
     from datasets import available_datasets
     from gui import run_gui
-    from realtime import BeatClassifier, StreamingEngine
 
     model_path = MODEL_DIR / f"{args.model}_best.pt"
     if not model_path.exists():
         print(f"未找到模型权重 {model_path}，请先运行: run.py train --model {args.model}")
         return 1
 
-    clf = BeatClassifier(args.model, model_path)
-    # 与端侧对齐：用因果流式引擎（固件 rt_tick 的同构实现），4 倍速、20ms tick
-    engine = StreamingEngine(clf, speed=4)
+    def build_engine():
+        # 延迟导入：torch 和模型权重放到 GUI 首帧之后再加载，缩短上位机启动时间。
+        from realtime import BeatClassifier, StreamingEngine
+        clf = BeatClassifier(args.model, model_path)
+        # 与端侧对齐：用因果流式引擎（固件 rt_tick 的同构实现），4 倍速、20ms tick
+        return StreamingEngine(clf, speed=4)
 
     # GUI 里用下拉框选择数据集（MIT-BIH 记录 + sdcard/ 导出的 .BIN），
-    # 与端侧「演示模式」的样本列表对应。--record 只用于预选。
-    datasets = available_datasets()
-    if not datasets:
-        print("[警告] 未找到可用数据集：data/ 下需有 MIT-BIH 记录，或 sdcard/ 下有 .BIN")
-    return run_gui(engine=engine, datasets=datasets,
+    # 与端侧「演示模式」的样本列表对应。扫描放到首帧后再做，避免阻塞启动。--record 只用于预选。
+    return run_gui(engine_loader=build_engine,
+                   datasets_loader=available_datasets,
                    initial_label=f"MIT-BIH 记录 {args.record}")
 
 

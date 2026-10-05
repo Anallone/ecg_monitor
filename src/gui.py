@@ -21,11 +21,9 @@ import traceback
 from pathlib import Path
 
 import numpy as np
-from scipy.signal import butter, sosfilt, sosfilt_zi
 
 from ble_client import MODE_DEMO, MODE_LIVE
 from config import CLASSES, FS, ROOT
-from preprocessing import bandpass_filter, notch_filter
 
 try:
     from PySide6.QtCore import QPointF, Qt, QThread, QTimer, Signal
@@ -85,6 +83,19 @@ DEFAULT_SPEED = 4
 DEFAULT_WINDOW_S = 3
 VIEW_POINTS = DEFAULT_WINDOW_S * FS      # 默认窗口点数（360*3 = 1080）
 CONTROL_H = 32                            # 工具栏控件统一高度（下拉框/按钮/分段按钮对齐）
+
+
+def _debug_log(message: str) -> None:
+    """写入轻量诊断日志，便于排查打包版启动/加载卡顿。"""
+    line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n"
+    for path in (ROOT / "ecg_monitor_debug.log",
+                 Path.home() / "ecg_monitor_debug.log"):
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line)
+            return
+        except Exception:
+            continue
 
 
 class ECGPlot(QWidget):
@@ -284,12 +295,53 @@ class PrepareWorker(QThread):
 
     def run(self):
         try:
+            from preprocessing import bandpass_filter, notch_filter
             raw = np.asarray(self.signal, dtype=np.float64)
             if raw.ndim > 1:
                 raw = raw[:, 0]
             filtered = notch_filter(bandpass_filter(raw)).astype(np.float32)
             self.engine.load(filtered)      # 预计算 integ / thr（一次性，O(n)）
             self.finished.emit(filtered)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(f"{exc}\n{traceback.format_exc(limit=3)}")
+
+
+class EngineLoaderThread(QThread):
+    """延迟加载分析引擎，避免 torch 与模型权重阻塞 GUI 首帧。"""
+
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, loader, parent=None):
+        super().__init__(parent)
+        self.loader = loader
+
+    def run(self):
+        try:
+            _debug_log("EngineLoaderThread: start")
+            engine = self.loader()
+            if engine is None:
+                raise RuntimeError("分析引擎加载器未返回引擎")
+            _debug_log("EngineLoaderThread: ready")
+            self.finished.emit(engine)
+        except Exception as exc:  # noqa: BLE001
+            _debug_log(f"EngineLoaderThread: failed {exc}")
+            self.failed.emit(f"{exc}\n{traceback.format_exc(limit=3)}")
+
+
+class DatasetLoaderThread(QThread):
+    """后台读取本地数据集，避免 MIT-BIH 大文件阻塞 UI。"""
+
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, loader, parent=None):
+        super().__init__(parent)
+        self.loader = loader
+
+    def run(self):
+        try:
+            self.finished.emit(self.loader())
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(f"{exc}\n{traceback.format_exc(limit=3)}")
 
@@ -475,13 +527,21 @@ def _light_title_bar(win) -> None:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, engine=None, datasets=None):
+    def __init__(self, engine=None, datasets=None, engine_loader=None,
+                 datasets_loader=None):
         super().__init__()
         self.setWindowTitle("轻量级可穿戴 ECG 实时心律失常监测系统")
         self.resize(1000, 720)
         self.engine = engine
+        self.engine_loader = engine_loader
+        self._engine_thread = None
+        self._engine_loading = False
+        self._engine_pending_callbacks = []
         self.datasets = list(datasets or [])   # [(显示名, 加载函数)]
+        self.datasets_loader = datasets_loader
+        self._pending_initial_label = None
         self.worker = None
+        self.dataset_thread = None
 
         central = QWidget()
         central.setStyleSheet(f"background-color: {PALETTE['BG_APP']};")
@@ -651,6 +711,15 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.setInterval(TICK_MS)
         self.timer.timeout.connect(self._tick)
+        # 引擎加载/准备期间的状态心跳，避免长时间无反馈像卡死。
+        self._engine_wait_timer = QTimer(self)
+        self._engine_wait_timer.setInterval(500)
+        self._engine_wait_timer.timeout.connect(self._update_engine_wait_status)
+        self._engine_wait_started = 0.0
+        self._engine_timeout_timer = QTimer(self)
+        self._engine_timeout_timer.setSingleShot(True)
+        self._engine_timeout_timer.timeout.connect(self._on_engine_timeout)
+        self._engine_generation = 0
         self.playing = False
         self.paused = False
         self.filtered = None
@@ -677,6 +746,51 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # 数据加载
     # ------------------------------------------------------------------
+    def _load_dataset_catalog(self):
+        """首帧显示后扫描可用数据集，尽量不阻塞窗口首次绘制。"""
+        if self.datasets_loader is None:
+            return
+        self.dataset_thread = DatasetLoaderThread(self.datasets_loader, self)
+        self.dataset_thread.setPriority(QThread.Priority.LowPriority)
+        self.dataset_thread.finished.connect(self._on_dataset_catalog_loaded)
+        self.dataset_thread.failed.connect(self._on_dataset_catalog_failed)
+        self.dataset_thread.start()
+
+    def _on_dataset_catalog_loaded(self, items):
+        self.dataset_thread = None
+        self.datasets = list(items or [])
+        self.combo.clear()
+        for label, _ in self.datasets:
+            self.combo.addItem(label)
+        has_ds = bool(self.datasets)
+        self.combo.setEnabled(has_ds)
+        self.btn_load.setEnabled(has_ds)
+        self._refresh_data_path_enabled()
+
+        if self._pending_initial_label:
+            idx = self.combo.findText(self._pending_initial_label)
+            if idx >= 0:
+                self.combo.setCurrentIndex(idx)
+            self._pending_initial_label = None
+
+        if has_ds:
+            if self.engine is None and self._engine_loading:
+                return
+            if self.signal is None:
+                self.lbl_status.setText("就绪")
+                self.lbl_status.setStyleSheet(
+                    f"color:{PALETTE['BODY']}; font-size:14px;")
+        else:
+            self.lbl_status.setText(
+                "⚠ 未找到可用数据集：data/ 下需有 MIT-BIH 记录，或 sdcard/ 下有 .BIN 样本")
+
+    def _on_dataset_catalog_failed(self, msg):
+        self.dataset_thread = None
+        self.lbl_status.setText(f"⚠ 数据集扫描失败：{msg.splitlines()[0]}")
+        self.lbl_status.setStyleSheet(
+            f"color:{PALETTE['ALERT']}; font-size:12px; font-weight:bold;")
+        print("[GUI] 数据集扫描失败：\n", msg, file=sys.stderr)
+
     def _open(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择 ECG 文件",
                                               "", "Numpy (*.npy);;所有文件 (*)")
@@ -695,17 +809,30 @@ class MainWindow(QMainWindow):
         if idx < 0 or idx >= len(self.datasets):
             return
         label, loader = self.datasets[idx]
+        if self.dataset_thread is not None and self.dataset_thread.isRunning():
+            self.lbl_status.setText("⏳ 上一个数据集仍在读取，请稍候…")
+            self.lbl_status.setStyleSheet(
+                f"color:{PALETTE['ALERT']}; font-size:14px; font-weight:bold;")
+            return
         self.lbl_status.setText(f"⏳ 正在加载 {label} …")
         self.lbl_status.setStyleSheet(f"color:{PALETTE['ALERT']}; font-size:14px;")
-        # 处理事件让上面的提示先渲染出来（读一条 MIT-BIH 记录约 1 秒）
-        QApplication.processEvents()
-        try:
-            sig = loader()
-        except Exception as exc:  # noqa: BLE001
-            self.lbl_status.setText(f"⚠ 加载 {label} 失败：{exc}")
-            self.lbl_status.setStyleSheet(f"color:{PALETTE['ALERT']}; font-size:14px;")
-            return
+        self.dataset_thread = DatasetLoaderThread(loader, self)
+        self.dataset_thread.setPriority(QThread.Priority.LowPriority)
+        self.dataset_thread.finished.connect(
+            lambda sig, _label=label: self._on_dataset_loaded(_label, sig))
+        self.dataset_thread.failed.connect(self._on_dataset_failed)
+        self.dataset_thread.start()
+
+    def _on_dataset_loaded(self, label, sig):
+        self.dataset_thread = None
         self._load(sig, label)
+
+    def _on_dataset_failed(self, msg):
+        self.dataset_thread = None
+        self.lbl_status.setText(f"⚠ 数据集加载失败：{msg.splitlines()[0]}")
+        self.lbl_status.setStyleSheet(
+            f"color:{PALETTE['ALERT']}; font-size:14px; font-weight:bold;")
+        print("[GUI] 数据集加载失败：\n", msg, file=sys.stderr)
 
     def _load(self, sig, label=None):
         sig = np.asarray(sig, dtype=np.float32)
@@ -718,7 +845,8 @@ class MainWindow(QMainWindow):
         self.latched_alarm = 0
         self.alarm_hr_extreme = 0.0
         self.letter = "--"
-        self.ecg_plot.set_source(np.zeros(0, dtype=np.float32))
+        # 先展示原始波形，避免等待引擎/滤波期间屏幕完全空白，用户误以为卡死。
+        self.ecg_plot.set_source(sig)
         self.hr_plot.set_hr([])
         for c in CLASSES:
             self.stat_labels[c].setText(f"{c}: 0")
@@ -775,7 +903,10 @@ class MainWindow(QMainWindow):
     # ---- 连接生命周期 ----
     def _connect_ble(self):
         if self.engine is None:
-            self._ble_status_text("⚠ 无可用分析引擎（请用 run.py gui 启动）", alert=True)
+            if self.engine_loader is not None:
+                self._ensure_engine(self._connect_ble)
+            else:
+                self._ble_status_text("⚠ 无可用分析引擎（请用 run.py gui 启动）", alert=True)
             return
         try:
             from ble_client import BleClientWorker
@@ -859,6 +990,7 @@ class MainWindow(QMainWindow):
 
         # 演示会话的样本在设备端已滤波+z-score，直接喂；实时会话是原始值，由上位机因果滤波。
         if self.ble_mode == MODE_LIVE:
+            from scipy.signal import butter, sosfilt_zi
             sos_bp = butter(4, [0.5, 30.0], btype="band", fs=FS, output="sos")
             sos_notch = butter(2, [49.0, 51.0], btype="bandstop", fs=FS, output="sos")
             self.ble_sos = np.vstack([sos_bp, sos_notch])
@@ -994,7 +1126,10 @@ class MainWindow(QMainWindow):
     # 准备（后台线程）+ 实时回放
     # ------------------------------------------------------------------
     def _prepare_and_play(self):
-        if self.signal is None or self.engine is None:
+        if self.signal is None:
+            return
+        if self.engine is None:
+            self._ensure_engine(self._prepare_and_play)
             return
         if self.worker is not None and self.worker.isRunning():
             # 上一次准备尚未结束：给出可见反馈，而不是静默忽略本次请求
@@ -1013,6 +1148,136 @@ class MainWindow(QMainWindow):
         self.worker.finished.connect(self._on_ready)
         self.worker.failed.connect(self._on_failed)
         self.worker.start()
+
+    def _ensure_engine(self, callback=None):
+        """需要 engine 时再加载，避免 torch/模型权重拖慢 GUI 首帧。"""
+        _debug_log(
+            f"_ensure_engine: engine={self.engine is not None} "
+            f"loader={self.engine_loader is not None} loading={self._engine_loading}")
+        if self.engine is not None:
+            if callback is not None:
+                callback()
+            return
+        if self.engine_loader is None:
+            self.lbl_status.setText("⚠ 无可用分析引擎（请用 run.py gui 启动）")
+            self.lbl_status.setStyleSheet(
+                f"color:{PALETTE['ALERT']}; font-size:14px; font-weight:bold;")
+            return
+        if callback is not None:
+            self._engine_pending_callbacks.append(callback)
+        if self._engine_loading:
+            self._update_engine_wait_status()
+            return
+
+        if self._engine_thread is not None and self._engine_thread.isRunning():
+            # 上一次超时/失败后仍残留的线程先回收，避免多线程同时导入 torch。
+            self._retire_thread(self._engine_thread)
+            self._engine_thread = None
+
+        try:
+            self._engine_loading = True
+            self.btn_play.setEnabled(False)
+            self._engine_wait_started = time.monotonic()
+            self._engine_wait_timer.start()
+            self._update_engine_wait_status()
+            self._engine_generation += 1
+            generation = self._engine_generation
+            thread = EngineLoaderThread(self.engine_loader, self)
+            try:
+                thread.setPriority(QThread.Priority.NormalPriority)
+            except Exception as exc:  # noqa: BLE001
+                _debug_log(f"_ensure_engine: setPriority failed {exc}")
+            thread.finished.connect(
+                lambda engine, _gen=generation: self._on_engine_ready(engine, _gen))
+            thread.failed.connect(
+                lambda msg, _gen=generation: self._on_engine_failed(msg, _gen))
+            self._engine_thread = thread
+            self._engine_timeout_timer.start(90_000)
+            _debug_log("_ensure_engine: thread started")
+            thread.start()
+        except Exception as exc:  # noqa: BLE001
+            self._engine_wait_timer.stop()
+            self._engine_timeout_timer.stop()
+            self._engine_loading = False
+            self.btn_play.setEnabled(self.signal is not None)
+            self.lbl_status.setText(f"⚠ 分析引擎启动失败：{exc}")
+            self.lbl_status.setStyleSheet(
+                f"color:{PALETTE['ALERT']}; font-size:12px; font-weight:bold;")
+            _debug_log(f"_ensure_engine: start failed {exc}")
+
+    def _preload_engine(self):
+        """首帧显示后立即开始预热模型，用户加载数据/连接设备时通常已就绪。"""
+        _debug_log("_preload_engine: called")
+        if self.engine is None and self.engine_loader is not None:
+            _debug_log("_preload_engine: starting ensure")
+            self._ensure_engine()
+
+    def _update_engine_wait_status(self):
+        """等待引擎时显示动态进度，避免状态栏长时间静止造成“卡死”错觉。"""
+        if not self._engine_loading:
+            return
+        secs = int(time.monotonic() - self._engine_wait_started)
+        dots = "." * (1 + (secs % 3))
+        self.lbl_status.setText(f"⏳ 正在加载分析引擎{dots} 已等待 {secs}s")
+        self.lbl_status.setStyleSheet(
+            f"color:{PALETTE['ALERT']}; font-size:14px; font-weight:bold;")
+
+    def _on_engine_ready(self, engine, generation=None):
+        if generation is not None and generation != self._engine_generation:
+            _debug_log(f"_on_engine_ready: stale generation {generation}, ignore")
+            return
+        self._engine_wait_timer.stop()
+        self._engine_timeout_timer.stop()
+        self.engine = engine
+        self._engine_loading = False
+        _debug_log("_on_engine_ready: engine set")
+        callbacks, self._engine_pending_callbacks = self._engine_pending_callbacks, []
+        if callbacks:
+            for callback in callbacks:
+                try:
+                    callback()
+                except Exception:  # noqa: BLE001
+                    traceback.print_exc()
+        elif self.datasets or self.signal is not None:
+            self.lbl_status.setText("就绪")
+            self.lbl_status.setStyleSheet(f"color:{PALETTE['BODY']}; font-size:14px;")
+            self.btn_play.setEnabled(self.signal is not None)
+        elif self.datasets_loader is not None:
+            self.lbl_status.setText("分析引擎已就绪，正在整理数据列表…")
+            self.lbl_status.setStyleSheet(
+                f"color:{PALETTE['BODY']}; font-size:14px;")
+        else:
+            self.lbl_status.setText(
+                "⚠ 未找到可用数据集：data/ 下需有 MIT-BIH 记录，或 sdcard/ 下有 .BIN 样本")
+
+    def _on_engine_failed(self, msg, generation=None):
+        if generation is not None and generation != self._engine_generation:
+            _debug_log(f"_on_engine_failed: stale generation {generation}, ignore")
+            return
+        self._engine_wait_timer.stop()
+        self._engine_timeout_timer.stop()
+        self._engine_loading = False
+        self._engine_pending_callbacks = []
+        self.btn_play.setEnabled(self.signal is not None)
+        self.lbl_status.setText(f"⚠ 分析引擎加载失败：{msg.splitlines()[0]}")
+        self.lbl_status.setStyleSheet(
+            f"color:{PALETTE['ALERT']}; font-size:12px; font-weight:bold;")
+        print("[GUI] 分析引擎加载失败：\n", msg, file=sys.stderr)
+        _debug_log(f"_on_engine_failed: {msg.splitlines()[0]}")
+
+    def _on_engine_timeout(self):
+        """引擎加载超时兜底，避免永久停在“正在加载分析引擎”。"""
+        if not self._engine_loading:
+            return
+        self._engine_wait_timer.stop()
+        self._engine_loading = False
+        self._engine_pending_callbacks = []
+        self.btn_play.setEnabled(self.signal is not None)
+        self.lbl_status.setText("⚠ 分析引擎加载超时，请重试或重启程序")
+        self.lbl_status.setStyleSheet(
+            f"color:{PALETTE['ALERT']}; font-size:12px; font-weight:bold;")
+        print("[GUI] 分析引擎加载超时（>90s）", file=sys.stderr)
+        _debug_log("_on_engine_timeout: >90s")
 
     def _on_ready(self, filtered):
         """后台准备完成：显示波形并立刻开始 4 倍速实时回放。"""
@@ -1064,6 +1329,7 @@ class MainWindow(QMainWindow):
             chunks, self.ble_pending = self.ble_pending, []
             arr = np.concatenate(chunks)
             if self.ble_mode == MODE_LIVE and self.ble_sos is not None:
+                from scipy.signal import sosfilt
                 arr, self.ble_zi = sosfilt(self.ble_sos, arr, zi=self.ble_zi)
             self.engine.feed(arr)
         st = self.engine.tick(TICK_MS)
@@ -1252,12 +1518,16 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):  # noqa: N802
         # 先停回放定时器，再等后台线程结束，避免进程退出时线程仍在写导致崩溃
         self.timer.stop()
+        self._engine_wait_timer.stop()
+        self._engine_timeout_timer.stop()
         self.playing = False
         if self.ble is not None:
             self.ble.stop()
             self._retire_thread(self.ble)
             self.ble = None
         self._retire_thread(self.worker)
+        self._retire_thread(self.dataset_thread)
+        self._retire_thread(self._engine_thread)
         super().closeEvent(event)
 
 
@@ -1315,29 +1585,48 @@ def _load_app_icon() -> "QIcon | None":
     return None
 
 
-def run_gui(engine=None, datasets=None, initial_label=None):
+def run_gui(engine=None, datasets=None, initial_label=None, engine_loader=None,
+            datasets_loader=None):
     """启动 GUI。
 
     @param datasets       [(显示名, 加载函数)]，见 src/datasets.py
     @param initial_label  若给出且能在 datasets 中匹配到，则预选该项
+    @param engine_loader  可选；返回分析引擎的可调用对象。GUI 会在真正需要时后台调用，
+                          避免 torch / 模型权重阻塞首帧。
+    @param datasets_loader 可选；返回 [(显示名, 加载函数)] 的可调用对象。GUI 会在首帧后
+                          后台扫描，避免目录扫描阻塞启动。
     """
     if not HAS_QT:
         print("PySide6 未安装，无法启动 GUI")
         return 1
+    _debug_log("run_gui: start")
     # 只传程序名，避免 Qt 解析 argparse 残留参数（--record 等）产生告警
     # 先装过滤器，覆盖 QApplication 创建阶段的 Qt 消息
     _install_qt_warning_filter()
     app = QApplication([sys.argv[0]])
+    _debug_log("run_gui: app created")
     icon = _load_app_icon()
     if icon is not None:
         app.setWindowIcon(icon)     # 所有窗口继承，含任务栏
     _normalize_app_font(app)
-    win = MainWindow(engine=engine, datasets=datasets)
-    if initial_label:
+    win = MainWindow(engine=engine, datasets=datasets, engine_loader=engine_loader,
+                     datasets_loader=datasets_loader)
+    _debug_log("run_gui: window created")
+    if datasets_loader is not None and datasets is None:
+        win._pending_initial_label = initial_label
+    elif initial_label:
         idx = win.combo.findText(initial_label)
         if idx >= 0:
             win.combo.setCurrentIndex(idx)
     win.show()
+    _debug_log("run_gui: window shown")
+    if engine is None and engine_loader is not None:
+        _debug_log("run_gui: schedule engine preload")
+        QTimer.singleShot(0, win._preload_engine)
+    if datasets_loader is not None and datasets is None:
+        _debug_log("run_gui: schedule dataset scan")
+        QTimer.singleShot(0, win._load_dataset_catalog)
+    _debug_log("run_gui: entering event loop")
     return app.exec()
 
 
