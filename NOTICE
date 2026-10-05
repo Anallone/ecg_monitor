@@ -1,0 +1,27 @@
+# Third-Party Notices
+
+## MIT-BIH Arrhythmia Database (`data/`)
+
+The ECG records under `data/` are from the MIT-BIH Arrhythmia Database,
+obtained from PhysioNet:
+
+https://physionet.org/content/mitdb/
+
+This database is distributed by PhysioNet under the Open Data Commons
+Attribution License v1.0 (ODC-By 1.0). Please review the current license
+terms at the source above before redistributing or reusing this data.
+
+Recommended citations:
+
+- Goldberger A, Amaral L, Glass L, Hausdorff J, Ivanov PC, Mark R, Mietus JE,
+  Moody GB, Peng CK, Stanley HE. "PhysioBank, PhysioToolkit, and PhysioNet:
+  Components of a New Research Resource for Complex Physiologic Signals."
+  Circulation 101(23):e215-e220, 2000.
+- Moody GB, Mark RG. "The impact of the MIT-BIH Arrhythmia Database."
+  IEEE Engineering in Medicine and Biology 20(3):45-50, 2001.
+
+## ESP-IDF managed components (`firmware/managed_components/`)
+
+Components under `firmware/managed_components/` are vendored ESP-IDF
+components distributed under their own licenses; see each component's
+`license.txt`.

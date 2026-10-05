@@ -11,5 +11,5 @@
     "files.exclude": {
         "**/firmware/build": true
     },
-    "cmake.sourceDirectory": "D:/ecg_monitor/firmware"
+    "cmake.sourceDirectory": "${workspaceFolder}/firmware"
 }

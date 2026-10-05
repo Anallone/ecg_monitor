@@ -4,17 +4,17 @@
         {
             "name": "ESP-IDF-v5.5.1-ESP32S3",
             "compileCommands": "${workspaceFolder}/firmware/build/compile_commands.json",
-            "compilerPath": "D:/esp/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc.exe",
+            "compilerPath": "${env:IDF_TOOLS_PATH}/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc.exe",
             "intelliSenseMode": "windows-gcc-x64",
             "cStandard": "c17",
             "cppStandard": "c++23",
             "includePath": [
                 "${workspaceFolder}/firmware/**",
                 "${workspaceFolder}/firmware/managed_components/**",
-                "D:/esp/v5.5.1/esp-idf/components/**",
-                "D:/esp/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include",
-                "D:/esp/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include-fixed",
-                "D:/esp/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include"
+                "${env:IDF_PATH}/components/**",
+                "${env:IDF_TOOLS_PATH}/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include",
+                "${env:IDF_TOOLS_PATH}/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include-fixed",
+                "${env:IDF_TOOLS_PATH}/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include"
             ],
             "defines": [
                 "ESP_PLATFORM",
@@ -25,7 +25,7 @@
                 "path": [
                     "${workspaceFolder}/firmware",
                     "${workspaceFolder}/firmware/managed_components",
-                    "D:/esp/v5.5.1/esp-idf/components"
+                    "${env:IDF_PATH}/components"
                 ],
                 "limitSymbolsToIncludedHeaders": true
             }
