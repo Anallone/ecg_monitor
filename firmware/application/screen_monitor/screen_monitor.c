@@ -40,9 +40,44 @@ static void dashed_hline(int y, uint16_t c) {
     for (int x = 0; x < LCD_H_RES; x += 8) lcd_fill(x, y, 4, 1, c);
 }
 
-void monitor_draw(bool live) {
+/** 演示模式报警卡片：两行（异常类型 + 锁存期极值），描边随闪烁相位翻转。 */
+static void alarm_card(int kind, int hr_extreme, bool phase) {
+    const int x = 8;
+    const int y = WAVE_Y + WAVE_H + 2;      /* 222：波形区下方留 2px 间隙 */
+    const int w = LCD_H_RES - 16;
+    const int h = 50;
+    uint16_t border = phase ? C_ALERT : C_ALERT_DIM;
+    char buf[32];
+
+    lcd_fill_round_rect(x, y, w, h, ROUND_R, C_ALERT_BG);
+    lcd_draw_round_rect_outline(x, y, w, h, ROUND_R, border);
+
+    const char* word = (kind == 1) ? tr(T_BIG_TACHY) : tr(T_BIG_BRADY);
+    lcd_draw_string_scale(x + 12, y + 6, word, C_TXT_HI, C_ALERT_BG, 1);
+
+    snprintf(buf, sizeof(buf), (kind == 1) ? tr(T_ALARM_PEAK) : tr(T_ALARM_LOW),
+             hr_extreme);
+    lcd_draw_string_scale(x + 12, y + 28, buf, C_TXT_MID, C_ALERT_BG, 1);
+}
+
+/** 确认报警按钮：砖红实心 + 深色文字，报警期间把注意力引向「确认」。 */
+static void alarm_ack_button(void) {
+    lcd_draw_round_rect_outline(MONITOR_ACK_X - 2, MONITOR_ACK_Y - 2,
+                                MONITOR_ACK_W + 4, MONITOR_ACK_H + 4,
+                                ROUND_R + 2, C_ALERT_DIM);
+    lcd_fill_round_rect(MONITOR_ACK_X, MONITOR_ACK_Y, MONITOR_ACK_W, MONITOR_ACK_H,
+                        ROUND_R, C_ALERT);
+    int tw = lcd_text_width(tr(T_ALARM_ACK), 1);
+    int tx = MONITOR_ACK_X + (MONITOR_ACK_W - tw) / 2;
+    int ty = MONITOR_ACK_Y + (MONITOR_ACK_H - 16) / 2;
+    lcd_draw_string_scale(tx, ty, tr(T_ALARM_ACK), C_BG, C_ALERT, 1);
+}
+
+static void monitor_draw_ex(bool live, int alarm_kind, int alarm_extreme, bool phase) {
     const rt_engine_t* e = player_engine();
     const bool has_data = (e->sig != NULL);
+    const bool alarming = alarm_kind != 0;
+    const int  effective_alarm = alarming ? alarm_kind : (has_data ? e->alarm : 0);
     char buf[48];
 
     lcd_fill(0, 0, LCD_H_RES, WAVE_Y, C_BG);
@@ -65,14 +100,16 @@ void monitor_draw(bool live) {
         snprintf(buf, sizeof(buf), "--");
     }
     lcd_draw_string_scale_center(HR_NUM_Y, buf,
-                                 (has_data && e->alarm) ? C_ALERT : C_TXT_HI, C_BG, 3);
+                                 (alarming || (has_data && e->alarm)) ? C_ALERT : C_TXT_HI,
+                                 C_BG, 3);
 
     /* ── 小字行：单位 · 报警 ── */
     if (has_data) {
-        const char* al = (e->alarm == 1) ? tr(T_AL_TACHY)
-                       : (e->alarm == 2) ? tr(T_AL_BRADY) : tr(T_AL_NONE);
+        const char* al = (effective_alarm == 1) ? tr(T_AL_TACHY)
+                       : (effective_alarm == 2) ? tr(T_AL_BRADY) : tr(T_AL_NONE);
         snprintf(buf, sizeof(buf), "%s · %s", tr(T_UNIT), al);
-        lcd_draw_string_scale_center(INFO_Y, buf, e->alarm ? C_ALERT : C_TXT_LOW, C_BG, 1);
+        lcd_draw_string_scale_center(INFO_Y, buf,
+                                     effective_alarm ? C_ALERT : C_TXT_LOW, C_BG, 1);
     } else {
         /* 无数据时给「等待前端信号」，不显示 0 这类误导性读数 */
         lcd_draw_string_scale_center(INFO_Y, tr(T_WAITSIG), C_TXT_LOW, C_BG, 1);
@@ -102,9 +139,21 @@ void monitor_draw(bool live) {
     s_marquee += 14;
     ui_marquee_frame(0, WAVE_Y, LCD_H_RES, WAVE_H, s_marquee);
 
-    /* ── 底部：只留 V 类计数（异常才是重点），其余四类不再堆在屏上 ── */
-    int sy = WAVE_Y + WAVE_H + 8;
+    /* GUI 同款：报警时不铺整屏红底，只让波形外框在砖红/中性间闪烁。 */
+    if (alarming) {
+        lcd_draw_rect(0, WAVE_Y, LCD_H_RES, WAVE_H,
+                      phase ? C_ALERT : C_BORDER);
+    }
+
+    /* ── 底部：报警时换成报警卡片 + 确认按钮，其余情况保持 V 计数 / 进度 ── */
     lcd_fill(0, WAVE_Y + WAVE_H, LCD_H_RES, LCD_V_RES - (WAVE_Y + WAVE_H), C_BG);
+    if (alarming) {
+        alarm_card(alarm_kind, alarm_extreme, phase);
+        alarm_ack_button();
+        return;
+    }
+
+    int sy = WAVE_Y + WAVE_H + 8;
     snprintf(buf, sizeof(buf), "V: %d", e->cls_count[2]);
     lcd_draw_string_scale(8, sy, buf, C_ALERT, C_BG, 1);
 
@@ -120,4 +169,12 @@ void monitor_draw(bool live) {
     }
 
     ui_hint(tr(T_TAPBACK));
+}
+
+void monitor_draw(bool live) {
+    monitor_draw_ex(live, 0, 0, false);
+}
+
+void monitor_draw_alarm(bool live, int kind, int hr_extreme, bool phase) {
+    monitor_draw_ex(live, kind, hr_extreme, phase);
 }

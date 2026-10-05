@@ -4,7 +4,7 @@
  * 交互流程：
  *   上电动画(ST_BOOT) -> 模式选择(ST_MODE) -> 实时模式(ST_REALTIME)
  *                                          -> 演示模式样本列表(ST_DEMO_MENU)
- *                                             -> 播放(ST_PLAY) -> 报警(ST_ALARM)
+ *                                             -> 播放(ST_PLAY，报警与 GUI 同款内联锁存)
  *                                          -> 设置(ST_SETTINGS)：语言 / 亮度
  *
  * 架构：业务逻辑全部在 application/ 下按模块拆分，每个模块是独立 ESP-IDF 组件、
@@ -13,9 +13,9 @@
  *   touch         触摸采样与点按       ui_widgets  UI 基元与配色
  *   waveform      波形帧缓冲渲染       player      样本目录 + 回放引擎
  *   screen_boot / screen_mode / screen_settings / screen_demo /
- *   screen_monitor / screen_alarm     六个页面（绘制 + 私有状态 + 触摸处理）
+ *   screen_monitor                   五个页面（绘制 + 私有状态 + 触摸处理）
  *
- * 本文件只保留：app_state_t 七状态枚举 + app_main 的初始化顺序与状态机。
+ * 本文件只保留：app_state_t 六状态枚举 + app_main 的初始化顺序与状态机。
  *
  * 说明：
  *  - 页面私有布局常量随各自模块走；全站共用的在 ui_widgets.h。
@@ -53,7 +53,6 @@
 #include "waveform.h"
 
 /* 页面模块 */
-#include "screen_alarm.h"
 #include "screen_boot.h"
 #include "screen_demo.h"
 #include "screen_mode.h"
@@ -105,7 +104,7 @@ static bool               s_live_on = false;
 /* 状态                                                                      */
 /* ========================================================================= */
 typedef enum {
-    ST_BOOT, ST_MODE, ST_REALTIME, ST_SETTINGS, ST_DEMO_MENU, ST_PLAY, ST_ALARM
+    ST_BOOT, ST_MODE, ST_REALTIME, ST_SETTINGS, ST_DEMO_MENU, ST_PLAY
 } app_state_t;
 
 /* 演示样本列表的滑动状态 */
@@ -245,6 +244,7 @@ void app_main(void) {
     app_state_t st = ST_BOOT;
     bool alarm_phase = false;
     int  alarm_kind = 0;
+    int  alarm_hr_extreme = 0;   /* 报警锁存期极值（过速峰值 / 过缓最低，GUI 同款） */
     uint32_t alarm_next_flip = 0;
 
     boot_enter();
@@ -255,7 +255,7 @@ void app_main(void) {
 
         /* BLE 断开：若正在推流回放，停止并回到模式选择页（断连不空转推流） */
         bool ble_lost = ble_stream_disconnect_pending();
-        if (ble_lost && (st == ST_PLAY || st == ST_ALARM)) {
+        if (ble_lost && st == ST_PLAY) {
             ESP_LOGI(TAG, "BLE disconnected, stop playback");
             ble_stream_end();
             player_stop();
@@ -304,10 +304,16 @@ void app_main(void) {
                             ESP_LOGW(TAG, "实时前端不可用（检查 MAX30003 接线），仅显示等待页");
                         }
                     }
+                    alarm_kind = 0;
+                    alarm_hr_extreme = 0;
+                    alarm_phase = false;
                     st = ST_REALTIME;
                     monitor_draw(true);
                     break;
                 case MODE_TAP_DEMO:
+                    alarm_kind = 0;
+                    alarm_hr_extreme = 0;
+                    alarm_phase = false;
                     st = ST_DEMO_MENU;
                     demo_draw();
                     break;
@@ -323,12 +329,27 @@ void app_main(void) {
 
         case ST_REALTIME:
             if (tapped) {
+                if (alarm_kind != 0 &&
+                    ui_hit(tx, ty, MONITOR_ACK_X, MONITOR_ACK_Y,
+                           MONITOR_ACK_W, MONITOR_ACK_H)) {
+                    /* GUI 同款：确认报警只解除锁存，实时监测继续。 */
+                    ESP_LOGI(TAG, "live alarm ack (%s), continue monitoring",
+                             alarm_kind == 1 ? "TACHY" : "BRADY");
+                    alarm_kind = 0;
+                    alarm_hr_extreme = 0;
+                    alarm_phase = false;
+                    monitor_draw(true);
+                    break;
+                }
                 if (s_live_on) {                 /* 停采集并释放 SPI 总线，再回模式页 */
                     ble_stream_end();
                     ecg_max30003_stop();
                     player_stop();
                     s_live_on = false;
                 }
+                alarm_kind = 0;
+                alarm_hr_extreme = 0;
+                alarm_phase = false;
                 st = ST_MODE;
                 mode_draw();
                 break;
@@ -349,10 +370,40 @@ void app_main(void) {
                     ble_stream_feed(raw, got);    /* BLE 上传保持原始数据 */
                 }
                 player_tick();
+
+                /* GUI 同款锁存：心率越界即锁存，并记录锁存期极值。 */
+                if (alarm_kind == 0 && player_engine()->alarm != 0) {
+                    alarm_kind = player_engine()->alarm;
+                    alarm_hr_extreme = (int)(player_engine()->hr + 0.5f);
+                    alarm_phase = true;
+                    alarm_next_flip = xTaskGetTickCount();
+                    ESP_LOGW(TAG, "LIVE ALARM: %s %.0f bpm",
+                             player_engine()->alarm == 1 ? "TACHY" : "BRADY",
+                             (double)player_engine()->hr);
+                }
+
+                if (alarm_kind != 0) {
+                    int hr = (int)(player_engine()->hr + 0.5f);
+                    if (alarm_kind == 1) {
+                        if (hr > alarm_hr_extreme) alarm_hr_extreme = hr;
+                    } else {
+                        if (alarm_hr_extreme <= 0) alarm_hr_extreme = hr;
+                        else if (hr < alarm_hr_extreme) alarm_hr_extreme = hr;
+                    }
+
+                    uint32_t now = xTaskGetTickCount();
+                    if ((int32_t)(now - alarm_next_flip) >= 0) {
+                        alarm_phase = !alarm_phase;
+                        alarm_next_flip = now + pdMS_TO_TICKS(250);   /* ~2Hz，与 GUI 一致 */
+                    }
+                    monitor_draw_alarm(true, alarm_kind, alarm_hr_extreme, alarm_phase);
+                } else {
+                    monitor_draw(true);
+                }
+            } else {
+                /* 未接采集前端：保持空监测页（等待前端信号） */
+                monitor_draw(true);
             }
-            /* 每 tick 重绘：跑马灯靠 monitor_draw 内部推进的相位动起来，
-             * 与演示模式播放页的刷新方式一致 */
-            monitor_draw(true);
             vTaskDelay(pdMS_TO_TICKS(PLAYER_TICK_MS));
             break;
 
@@ -395,72 +446,80 @@ void app_main(void) {
 
         case ST_PLAY: {
             if (tapped) {
-                ble_stream_end();
-                player_stop();
-                st = ST_DEMO_MENU;
-                demo_draw();
+                if (alarm_kind != 0 &&
+                    ui_hit(tx, ty, MONITOR_ACK_X, MONITOR_ACK_Y,
+                           MONITOR_ACK_W, MONITOR_ACK_H)) {
+                    /* GUI 同款：确认报警只解除锁存，播放继续（波形/读数不中断）。 */
+                    ESP_LOGI(TAG, "alarm ack (%s), continue playback",
+                             alarm_kind == 1 ? "TACHY" : "BRADY");
+                    alarm_kind = 0;
+                    alarm_hr_extreme = 0;
+                    alarm_phase = false;
+                    monitor_draw(false);
+                } else {
+                    ble_stream_end();
+                    player_stop();
+                    alarm_kind = 0;
+                    alarm_hr_extreme = 0;
+                    alarm_phase = false;
+                    st = ST_DEMO_MENU;
+                    demo_draw();
+                }
                 break;
             }
-            player_tick();
-            monitor_draw(false);
 
-            if (player_engine()->alarm != 0) {
-                st = ST_ALARM;
+            player_tick();
+
+            /* GUI 同款锁存：心率越界即锁存，并记录锁存期极值（过速峰值/过缓最低）。 */
+            if (alarm_kind == 0 && player_engine()->alarm != 0) {
                 alarm_kind = player_engine()->alarm;
+                alarm_hr_extreme = (int)(player_engine()->hr + 0.5f);
                 alarm_phase = true;
-                alarm_next_flip = xTaskGetTickCount();   /* tick 域记录，与下方翻转比较同域 */
+                alarm_next_flip = xTaskGetTickCount();
                 ESP_LOGW(TAG, "ALARM: %s %.0f bpm",
-                         player_engine()->alarm == 1 ? "TACHY" : "BRADY", (double)player_engine()->hr);
-            } else if (player_finished()) {
-                player_flush();   /* 直播引擎不自动冲刷末拍，先冲刷再取统计 */
-                ESP_LOGI(TAG, "done %s: N%d S%d V%d F%d Q%d", player_current_name(),
-                         player_engine()->cls_count[0], player_engine()->cls_count[1], player_engine()->cls_count[2],
-                         player_engine()->cls_count[3], player_engine()->cls_count[4]);
-                ble_stream_end();
-                player_stop();
-                st = ST_DEMO_MENU;
-                demo_draw();
+                         player_engine()->alarm == 1 ? "TACHY" : "BRADY",
+                         (double)player_engine()->hr);
             }
-            vTaskDelay(pdMS_TO_TICKS(PLAYER_TICK_MS));
-            break;
-        }
 
-        case ST_ALARM: {
-            /* 报警**锁存**：心率恢复或样本播完都不自动退出，必须触摸确认 */
-            if (tapped) {
-                ESP_LOGI(TAG, "alarm ack (%s)", alarm_kind == 1 ? "TACHY" : "BRADY");
-                ble_stream_end();
-                player_stop();
-                st = ST_DEMO_MENU;
-                demo_draw();
-                break;
+            if (alarm_kind != 0) {
+                int hr = (int)(player_engine()->hr + 0.5f);
+                if (alarm_kind == 1) {
+                    if (hr > alarm_hr_extreme) alarm_hr_extreme = hr;
+                } else {
+                    if (alarm_hr_extreme <= 0) alarm_hr_extreme = hr;
+                    else if (hr < alarm_hr_extreme) alarm_hr_extreme = hr;
+                }
+
+                uint32_t now = xTaskGetTickCount();
+                if ((int32_t)(now - alarm_next_flip) >= 0) {
+                    alarm_phase = !alarm_phase;
+                    alarm_next_flip = now + pdMS_TO_TICKS(250);   /* ~2Hz，与 GUI 一致 */
+                }
+                monitor_draw_alarm(false, alarm_kind, alarm_hr_extreme, alarm_phase);
+            } else {
+                monitor_draw(false);
             }
-            player_tick();
 
-            /* 报警锁存期间样本可能先播完：从开头续播并保留上次心率，
-             * 否则报警页的心率会永远定格在最后一个读数上（详见 player_reset_keep_hr）。 */
             if (player_finished()) {
-                player_flush();   /* 末拍先入统计，再决定续播/退出，避免少统计一拍 */
-                player_reset_keep_hr();
-            }
-
-            /* tick 域直接比较：xTaskGetTickCount()*portTICK_PERIOD_MS 换算 ms 后
-             * uint32 会溢出（100Hz tick 下约 497 天），溢出后比较失效、闪烁冻结；
-             * 有符号差值比较在回绕下依然正确（250ms 间隔远小于 2^31 tick）。 */
-            uint32_t now = xTaskGetTickCount();
-            if ((int32_t)(now - alarm_next_flip) >= 0) {
-                alarm_phase = !alarm_phase;
-                alarm_next_flip = now + pdMS_TO_TICKS(250);   /* ~2Hz 闪烁 */
-                alarm_draw(alarm_kind, alarm_phase);
-            } else if (alarm_hr_changed()) {
-                /* 闪烁相位未变但心率更新了：只刷数值区，读数不会被 2Hz 闪烁拖慢 */
-                uint16_t bg, fg;
-                alarm_colors(alarm_phase, &bg, &fg);
-                alarm_draw_hr(bg, fg);
+                player_flush();   /* 直播引擎不自动冲刷末拍，先冲刷再取统计 */
+                if (alarm_kind != 0) {
+                    /* 锁存期间样本先播完：续播，保证心率/波形继续推进（与 GUI 播放继续一致）。 */
+                    player_reset_keep_hr();
+                } else {
+                    ESP_LOGI(TAG, "done %s: N%d S%d V%d F%d Q%d", player_current_name(),
+                             player_engine()->cls_count[0], player_engine()->cls_count[1],
+                             player_engine()->cls_count[2], player_engine()->cls_count[3],
+                             player_engine()->cls_count[4]);
+                    ble_stream_end();
+                    player_stop();
+                    st = ST_DEMO_MENU;
+                    demo_draw();
+                }
             }
             vTaskDelay(pdMS_TO_TICKS(PLAYER_TICK_MS));
             break;
         }
+
         }
     }
 }

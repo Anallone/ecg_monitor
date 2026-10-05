@@ -72,9 +72,10 @@ extern const char* const T_AL_NONE[2];
 extern const char* const T_BIG_TACHY[2];
 extern const char* const T_BIG_BRADY[2];
 extern const char* const T_UNIT[2];
-/* 报警页的「心率」标签。用独立的短标签而不是 T_HR——后者含格式符与单位，
- * 那行文案是给监测页单行显示用的，拆不开。 */
-extern const char* const T_HR_LABEL[2];
+/* 演示模式报警（GUI 同款：锁存 + 极值 + 确认按钮） */
+extern const char* const T_ALARM_ACK[2];
+extern const char* const T_ALARM_PEAK[2];
+extern const char* const T_ALARM_LOW[2];
 
 #ifdef __cplusplus
 }

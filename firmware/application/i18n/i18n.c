@@ -58,4 +58,6 @@ const char* const T_AL_NONE[2]  = {"报警 无", "ALARM NONE"};
 const char* const T_BIG_TACHY[2]= {"心动过速", "TACHY"};
 const char* const T_BIG_BRADY[2]= {"心动过缓", "BRADY"};
 const char* const T_UNIT[2]     = {"次/分", "BPM"};
-const char* const T_HR_LABEL[2] = {"心率", "HR"};
+const char* const T_ALARM_ACK[2]= {"确认报警", "ACK ALARM"};
+const char* const T_ALARM_PEAK[2] = {"峰值 %d", "PEAK %d"};
+const char* const T_ALARM_LOW[2]  = {"最低 %d", "MIN %d"};
