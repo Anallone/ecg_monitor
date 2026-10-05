@@ -1,0 +1,4 @@
+dependencies:
+  espressif/esp_lcd_touch_ft5x06: "^1.1.0"
+  # 实测本板触摸 IC 为 CST816S(0x15)，与 FT6336U(0x38) 并存兼容：按 I2C 探测结果择一初始化
+  espressif/esp_lcd_touch_cst816s: "^1.1.0"

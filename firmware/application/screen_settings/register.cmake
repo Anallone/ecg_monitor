@@ -1,0 +1,1 @@
+app_register(screen_settings)

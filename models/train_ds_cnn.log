@@ -1,0 +1,29 @@
+使用设备: cpu
+模型: ds_cnn  参数量: 3,406  (约 13.3 KB fp32)
+epoch   1/60  loss=1.1728  val_acc=0.4610  [28s]
+epoch   2/60  loss=0.7493  val_acc=0.6406  [56s]
+epoch   3/60  loss=0.6162  val_acc=0.7605  [85s]
+epoch   4/60  loss=0.5398  val_acc=0.8039  [113s]
+epoch   5/60  loss=0.4890  val_acc=0.6100  [140s]
+epoch   6/60  loss=0.4495  val_acc=0.7819  [164s]
+epoch   7/60  loss=0.4162  val_acc=0.6455  [180s]
+epoch   8/60  loss=0.3898  val_acc=0.5683  [208s]
+epoch   9/60  loss=0.3781  val_acc=0.7200  [229s]
+epoch  10/60  loss=0.3610  val_acc=0.6257  [246s]
+epoch  11/60  loss=0.3447  val_acc=0.6653  [267s]
+epoch  12/60  loss=0.3354  val_acc=0.6160  [290s]
+epoch  13/60  loss=0.3235  val_acc=0.8844  [320s]
+epoch  14/60  loss=0.3142  val_acc=0.6398  [352s]
+epoch  15/60  loss=0.3025  val_acc=0.8072  [368s]
+epoch  16/60  loss=0.3005  val_acc=0.7884  [406s]
+epoch  17/60  loss=0.2888  val_acc=0.5549  [436s]
+epoch  18/60  loss=0.2807  val_acc=0.6659  [1327s]
+epoch  19/60  loss=0.2785  val_acc=0.5537  [1363s]
+epoch  20/60  loss=0.2756  val_acc=0.8205  [1393s]
+epoch  21/60  loss=0.2668  val_acc=0.7421  [8688s]
+epoch  22/60  loss=0.2595  val_acc=0.6066  [8759s]
+epoch  23/60  loss=0.2556  val_acc=0.7055  [8786s]
+早停：连续 10 个 epoch 无提升
+训练完成，耗时 8786.2s，最佳 val_acc=0.8844
+测试集 acc=0.7205  macro_f1=0.3767
+指标已保存至 D:\ecg_monitor\models\ds_cnn_metrics.json

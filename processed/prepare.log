@@ -1,0 +1,55 @@
+record 100: 2272 田
+record 101: 1865 田
+record 102: 2187 田
+record 103: 2084 田
+record 104: 2229 田
+record 105: 2572 田
+record 106: 2027 田
+record 107: 2137 田
+record 108: 1774 田
+record 109: 2531 田
+record 111: 2124 田
+record 112: 2538 田
+record 113: 1794 田
+record 114: 1879 田
+record 115: 1952 田
+record 116: 2411 田
+record 117: 1534 田
+record 118: 2288 田
+record 119: 1987 田
+record 121: 1862 田
+record 122: 2475 田
+record 123: 1518 田
+record 124: 1619 田
+record 200: 2600 田
+record 201: 2000 田
+record 202: 2136 田
+record 203: 2980 田
+record 205: 2656 田
+record 207: 1859 田
+record 208: 2953 田
+record 209: 3005 田
+record 210: 2648 田
+record 212: 2747 田
+record 213: 3250 田
+record 214: 2260 田
+record 215: 3363 田
+record 217: 2208 田
+record 219: 2287 田
+record 220: 2046 田
+record 221: 2427 田
+record 222: 2483 田
+record 223: 2605 田
+record 228: 2053 田
+record 230: 2256 田
+record 231: 1573 田
+record 232: 1780 田
+record 233: 3077 田
+record 234: 2753 田
+
+=== 皿蛍潤惚 ===
+train : 悳  52923  0(40095)  1(793)  2(3541)  3(1382)  4(7112)
+val   : 悳   6907  0(6236)  1(167)  2(490)  3(14)  4(0)
+test  : 悳  49834  0(44034)  1(2050)  2(3220)  3(388)  4(142)
+
+厮隠贋欺 D:\ecg_monitor\processed

@@ -1,0 +1,122 @@
+{
+  "input_len": 187,
+  "num_classes": 5,
+  "n_rr_features": 4,
+  "has_rr_head": true,
+  "n_params": 37445,
+  "layers": [
+    {
+      "c_in": 1,
+      "c_out": 28,
+      "k": 11,
+      "pad": 5,
+      "residual": false,
+      "se": false,
+      "se_h": 0,
+      "do_pool": true,
+      "pool_k": 2,
+      "dw_scale": 0.0024327178170361857,
+      "pw_scale": 0.006401930268355242
+    },
+    {
+      "c_in": 28,
+      "c_out": 28,
+      "k": 7,
+      "pad": 3,
+      "residual": true,
+      "se": true,
+      "se_h": 8,
+      "do_pool": false,
+      "pool_k": null,
+      "dw_scale": 0.002428268353770098,
+      "pw_scale": 0.020991008112749714
+    },
+    {
+      "c_in": 28,
+      "c_out": 28,
+      "k": 7,
+      "pad": 3,
+      "residual": true,
+      "se": true,
+      "se_h": 8,
+      "do_pool": true,
+      "pool_k": 2,
+      "dw_scale": 0.0022609487293273446,
+      "pw_scale": 0.022972955478457954
+    },
+    {
+      "c_in": 28,
+      "c_out": 56,
+      "k": 5,
+      "pad": 2,
+      "residual": false,
+      "se": true,
+      "se_h": 8,
+      "do_pool": false,
+      "pool_k": null,
+      "dw_scale": 0.0038608495644697053,
+      "pw_scale": 0.006532620257280004
+    },
+    {
+      "c_in": 56,
+      "c_out": 56,
+      "k": 5,
+      "pad": 2,
+      "residual": true,
+      "se": true,
+      "se_h": 8,
+      "do_pool": true,
+      "pool_k": 2,
+      "dw_scale": 0.003266281968965305,
+      "pw_scale": 0.12752122954120787
+    },
+    {
+      "c_in": 56,
+      "c_out": 112,
+      "k": 3,
+      "pad": 1,
+      "residual": false,
+      "se": true,
+      "se_h": 14,
+      "do_pool": false,
+      "pool_k": null,
+      "dw_scale": 0.003519770197980986,
+      "pw_scale": 0.02970936166958546
+    },
+    {
+      "c_in": 112,
+      "c_out": 112,
+      "k": 3,
+      "pad": 1,
+      "residual": true,
+      "se": true,
+      "se_h": 14,
+      "do_pool": false,
+      "pool_k": null,
+      "dw_scale": 0.0030810473941442536,
+      "pw_scale": 0.09981091566911833
+    }
+  ],
+  "fc_scale": 0.0033207087535557784,
+  "buffers": {
+    "max_act": 5236,
+    "max_dw": 2604,
+    "max_ch": 112,
+    "max_hid": 14,
+    "final_ch": 112,
+    "final_len": 23
+  },
+  "rr_head": {
+    "h": 16,
+    "w1_scale": 0.006319571667768824,
+    "w2_scale": 0.009791193984624908
+  },
+  "logit_bias": [
+    0.48453661799430847,
+    -2.063753843307495,
+    -0.4473421275615692,
+    -6.002690315246582,
+    0.0
+  ],
+  "logit_bias_folded_into": "fc_b"
+}

@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+runtime/
+*.egg-info/
+
+# 迁移产物（git bundle 本身即历史打包，不重复入库）
+migration/
+
+# SD 卡样本导出产物（用 tools/export_samples.py 按需重新生成）
+# 注意用 / 前缀锚定根目录，否则会连 firmware/components/sdcard/ 一起忽略掉
+/sdcard/
+
+# 外部数据库原始包与增广后的预处理缓存（体积大，按脚本重建）
+/data_ext/
+/processed_svdb/
+/processed_smote/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 本机临时/崩溃文件（不入库）
+_extract.txt
+bash.exe.stackdump
+
+# Word 打开文档时生成的锁文件
+~$*
+
+# 报告审查/修订的中间产物（备份、逐步 round 副本、一次性脚本）
+/_review_tmp/
+
+# ESP-IDF 构建产物（个人机需重新 cmake 编译）
+firmware/build/
+firmware/sdkconfig.old
+
+# 说明：data/（MIT-BIH 原始）、processed/（预处理缓存）、export/（ONNX/int8 C/TFLite）、
+# models/*.pt（权重）均纳入版本控制，便于个人机开箱即用、无需重新下载/重训。
+
+# PyInstaller 打包产物（build_exe.bat 按需重建，不入库）
+/build/
+/dist/
+/ECGMonitor.zip
+/build_exe_log.txt
+/ECGMonitor.spec
+
+# docs/ 作为独立的私有仓库单独管理，不纳入本仓库
+/docs/

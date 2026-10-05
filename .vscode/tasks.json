@@ -1,0 +1,47 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "ESP-IDF: build",
+            "type": "shell",
+            "command": "powershell -ExecutionPolicy Bypass -NoProfile -File ${workspaceFolder}/firmware/idf.ps1 build",
+            "options": { "cwd": "${workspaceFolder}/firmware" },
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "ESP-IDF: fullclean",
+            "type": "shell",
+            "command": "powershell -ExecutionPolicy Bypass -NoProfile -File ${workspaceFolder}/firmware/idf.ps1 fullclean",
+            "options": { "cwd": "${workspaceFolder}/firmware" }
+        },
+        {
+            "label": "ESP-IDF: flash",
+            "type": "shell",
+            "command": "powershell -ExecutionPolicy Bypass -NoProfile -File ${workspaceFolder}/firmware/idf.ps1 flash",
+            "options": { "cwd": "${workspaceFolder}/firmware" },
+            "problemMatcher": []
+        },
+        {
+            "label": "ESP-IDF: monitor",
+            "type": "shell",
+            "command": "powershell -ExecutionPolicy Bypass -NoProfile -File ${workspaceFolder}/firmware/idf.ps1 monitor",
+            "options": { "cwd": "${workspaceFolder}/firmware" },
+            "problemMatcher": []
+        },
+        {
+            "label": "ESP-IDF: build + flash + monitor",
+            "type": "shell",
+            "command": "powershell -ExecutionPolicy Bypass -NoProfile -File ${workspaceFolder}/firmware/idf.ps1 build flash monitor",
+            "options": { "cwd": "${workspaceFolder}/firmware" },
+            "problemMatcher": []
+        },
+        {
+            "label": "ESP-IDF: menuconfig",
+            "type": "shell",
+            "command": "powershell -ExecutionPolicy Bypass -NoProfile -File ${workspaceFolder}/firmware/idf.ps1 menuconfig",
+            "options": { "cwd": "${workspaceFolder}/firmware" },
+            "problemMatcher": []
+        }
+    ]
+}

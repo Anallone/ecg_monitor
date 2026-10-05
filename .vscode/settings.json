@@ -1,0 +1,15 @@
+{
+    "cmake.configureOnOpen": false,
+    "python.defaultInterpreterPath": "${workspaceFolder}/runtime/python/python.exe",
+    "files.associations": {
+        "*.h": "c"
+    },
+    "search.exclude": {
+        "**/firmware/build": true,
+        "**/firmware/managed_components": true
+    },
+    "files.exclude": {
+        "**/firmware/build": true
+    },
+    "cmake.sourceDirectory": "D:/ecg_monitor/firmware"
+}

@@ -1,0 +1,4 @@
+# Windows 批处理必须 CRLF 检出：LF-only 的 .bat 在 cmd.exe 下
+# 处理 goto 标签（如 build_exe.bat 的 :fail）会出错。
+*.bat text eol=crlf
+*.cmd text eol=crlf

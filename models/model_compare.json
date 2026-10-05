@@ -1,0 +1,32 @@
+[
+ {
+  "model": "ds_cnn",
+  "params": 7032,
+  "flops": 351939,
+  "weight_bytes": 6691,
+  "bias_bytes": 692,
+  "deploy_bytes": 7383,
+  "deploy_kb": 7.21,
+  "fp32_kb": 27.47
+ },
+ {
+  "model": "std_cnn",
+  "params": 14517,
+  "flops": 831280,
+  "weight_bytes": 14288,
+  "bias_bytes": 468,
+  "deploy_bytes": 14756,
+  "deploy_kb": 14.41,
+  "fp32_kb": 56.71
+ },
+ {
+  "model": "binary_cnn",
+  "params": 56677,
+  "flops": 3271264,
+  "weight_bytes": 7028,
+  "bias_bytes": 916,
+  "deploy_bytes": 7944,
+  "deploy_kb": 7.76,
+  "fp32_kb": 221.39
+ }
+]

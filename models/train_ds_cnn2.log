@@ -1,0 +1,10 @@
+使用设备: cpu
+模型: ds_cnn  参数量: 3,406  (约 13.3 KB fp32)
+epoch   1/50  loss=1.5127  val_acc=0.6993  val_f1=0.3174  [30s]
+epoch   2/50  loss=1.3511  val_acc=0.4893  val_f1=0.2643  [55s]
+epoch   3/50  loss=1.2429  val_acc=0.4603  val_f1=0.2558  [82s]
+epoch   4/50  loss=1.1861  val_acc=0.3971  val_f1=0.2499  [119s]
+epoch   5/50  loss=1.1251  val_acc=0.3358  val_f1=0.2610  [158s]
+epoch   6/50  loss=1.0742  val_acc=0.2828  val_f1=0.2489  [196s]
+epoch   7/50  loss=1.0100  val_acc=0.3660  val_f1=0.2730  [227s]
+epoch   8/50  loss=0.9745  val_acc=0.3237  val_f1=0.2538  [262s]

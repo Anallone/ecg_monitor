@@ -1,0 +1,34 @@
+使用设备: cpu
+模型: ds_cnn  参数量: 7,032  (约 27.5 KB fp32)
+epoch   1/60  loss=0.9937  val_acc=0.9217  val_f1=0.2828  [27s]
+epoch   2/60  loss=0.6848  val_acc=0.9289  val_f1=0.3050  [57s]
+epoch   3/60  loss=0.5582  val_acc=0.9330  val_f1=0.3152  [77s]
+epoch   4/60  loss=0.4768  val_acc=0.9331  val_f1=0.3149  [94s]
+epoch   5/60  loss=0.4198  val_acc=0.9386  val_f1=0.3302  [110s]
+epoch   6/60  loss=0.3871  val_acc=0.9385  val_f1=0.3289  [128s]
+epoch   7/60  loss=0.3658  val_acc=0.9320  val_f1=0.3121  [146s]
+epoch   8/60  loss=0.3472  val_acc=0.9587  val_f1=0.3710  [170s]
+epoch   9/60  loss=0.3328  val_acc=0.9411  val_f1=0.3356  [186s]
+epoch  10/60  loss=0.3229  val_acc=0.9422  val_f1=0.3376  [201s]
+epoch  11/60  loss=0.3149  val_acc=0.9529  val_f1=0.3608  [216s]
+epoch  12/60  loss=0.3019  val_acc=0.9509  val_f1=0.3573  [231s]
+epoch  13/60  loss=0.2956  val_acc=0.9512  val_f1=0.3692  [282s]
+epoch  14/60  loss=0.2905  val_acc=0.9503  val_f1=0.3576  [306s]
+epoch  15/60  loss=0.2827  val_acc=0.9498  val_f1=0.3797  [330s]
+epoch  16/60  loss=0.2784  val_acc=0.9482  val_f1=0.3673  [348s]
+epoch  17/60  loss=0.2713  val_acc=0.9528  val_f1=0.3814  [367s]
+epoch  18/60  loss=0.2735  val_acc=0.9625  val_f1=0.3898  [384s]
+epoch  19/60  loss=0.2670  val_acc=0.9586  val_f1=0.4158  [401s]
+epoch  20/60  loss=0.2622  val_acc=0.9589  val_f1=0.4111  [422s]
+epoch  21/60  loss=0.2565  val_acc=0.9599  val_f1=0.3952  [440s]
+epoch  22/60  loss=0.2557  val_acc=0.9493  val_f1=0.3736  [460s]
+epoch  23/60  loss=0.2514  val_acc=0.9593  val_f1=0.3767  [479s]
+epoch  24/60  loss=0.2497  val_acc=0.9550  val_f1=0.3858  [498s]
+epoch  25/60  loss=0.2473  val_acc=0.9563  val_f1=0.4141  [520s]
+epoch  26/60  loss=0.2461  val_acc=0.9622  val_f1=0.4034  [540s]
+epoch  27/60  loss=0.2404  val_acc=0.9608  val_f1=0.4061  [568s]
+epoch  28/60  loss=0.2382  val_acc=0.9566  val_f1=0.4172  [584s]
+早停：连续 10 个 epoch 无提升
+训练完成，耗时 583.9s，最佳 val_acc=0.9625 (acc=0.9625, f1=0.3898)
+测试集 acc=0.8864  macro_f1=0.3414
+指标已保存至 D:\ecg_monitor\models\ds_cnn_metrics.json
