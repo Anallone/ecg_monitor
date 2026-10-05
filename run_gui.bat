@@ -1,12 +1,9 @@
 @echo off
 setlocal
-set "ROOT=%~dp0"
 
-rem Pick interpreter: portable runtime first, then local .venv
-set "PY=%ROOT%runtime\python\python.exe"
-if not exist "%PY%" set "PY=%ROOT%.venv\Scripts\python.exe"
+call "%~dp0_env.bat"
 
-if not exist "%PY%" (
+if not defined PY (
     echo [ERROR] No Python interpreter found. Tried:
     echo    1^) %ROOT%runtime\python\python.exe   ^(portable runtime^)
     echo    2^) %ROOT%.venv\Scripts\python.exe      ^(local venv^)
@@ -18,15 +15,9 @@ if not exist "%PY%" (
     exit /b 1
 )
 
-rem Force UTF-8 for Python output
-set PYTHONUTF8=1
-set PYTHONIOENCODING=utf-8
-
 cd /d "%ROOT%src"
 "%PY%" gui.py
-if errorlevel 1 (
-    echo.
-    echo [ERROR] GUI exited with code %errorlevel%
-    pause
-)
+if errorlevel 1 echo [ERROR] GUI exited with code %errorlevel%
+if errorlevel 1 pause
+
 endlocal

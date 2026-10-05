@@ -25,7 +25,8 @@
 
 本项目支持**两种**环境方式，任选其一。下文命令统一写作
 `./runtime/python/python.exe`（便携方式）；若你用的是自建 venv，替换为
-`./.venv/Scripts/python` 即可。
+`./.venv/Scripts/python` 即可。Windows 下建议先双击 `check_env.bat` 自检，
+它会自动识别便携运行时与本地 venv，并指出缺失项。
 
 ### 方式 A：便携运行时（个人机推荐，免配置、免联网）
 
@@ -41,14 +42,20 @@ Windows 下可直接双击 `run_gui.bat` / `run_demo.bat`。
 
 ### 方式 B：自建 venv（开发机）
 
-```bash
-# Python 3.11（ML 生态兼容性最好，且与 ESP-IDF v5.5 的 py3.11 一致）
-uv venv --python 3.11 .venv
-./.venv/Scripts/python -m pip install -r requirements.txt
+```bat
+rem 推荐：自动检测 uv / py / python，创建 Python 3.11 venv 并安装核心依赖
+setup_env_uv.bat
+
+rem 仅当需要导出 TFLite / 使用 TensorFlow 相关工具时再加 --export
+setup_env_uv.bat --export
 ```
 
 > 已实测：本机使用清华 pip 镜像（`pip config` 已配置）。`uv pip` 在本机偶发卡死，
-> 统一使用 `python -m pip` 安装。
+> 因此安装命令统一走 `python -m pip`。
+>
+> 依赖已按用途拆分：`requirements.txt` 覆盖训练、推理、ONNX、GUI、BLE；
+> `requirements-export.txt` 只包含体积较大的 TFLite/TensorFlow 导出链，
+> 可用 `run_pip.bat install -r requirements-export.txt` 单独安装。
 
 ## 目录结构
 
@@ -77,9 +84,14 @@ uv venv --python 3.11 .venv
 ├── packaging/        # ecg_monitor_entry.py GUI 打包入口 + ecg.ico 应用图标
 ├── firmware/         # ESP32-S3 端侧固件（ESP-IDF v5.5；main/ + application/ 模块化）
 ├── run.py            # 一键入口
+├── _env.bat          # 公共解释器选择（被下方 .bat 脚本复用）
+├── check_env.bat     # 环境自检
+├── setup_env_uv.bat  # 联网重建 .venv（可加 --export）
 ├── run_gui.bat       # 一键启动 GUI（便携运行时）
 ├── run_demo.bat      # 一键命令行演示
-└── run_pip.bat       # 便携环境内执行 pip
+├── run_pip.bat       # 便携环境内执行 pip
+├── requirements.txt        # 核心依赖
+└── requirements-export.txt # 可选 TFLite/TensorFlow 导出依赖
 ```
 
 ## 使用

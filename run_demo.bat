@@ -1,12 +1,9 @@
 @echo off
 setlocal
-set "ROOT=%~dp0"
 
-rem Pick interpreter: portable runtime first, then local .venv
-set "PY=%ROOT%runtime\python\python.exe"
-if not exist "%PY%" set "PY=%ROOT%.venv\Scripts\python.exe"
+call "%~dp0_env.bat"
 
-if not exist "%PY%" (
+if not defined PY (
     echo [ERROR] No Python interpreter found. Tried:
     echo    1^) %ROOT%runtime\python\python.exe   ^(portable runtime^)
     echo    2^) %ROOT%.venv\Scripts\python.exe      ^(local venv^)
@@ -19,15 +16,12 @@ if not exist "%PY%" (
 )
 
 rem Default demo: record 200 (contains ventricular beats). Pass args to override.
-set "ARGS=--record 200 --model ds_cnn"
+set "ARGS=--record 200 --model res_se_cnn_rr4"
 if not "%~1"=="" set "ARGS=%*"
-
-rem Force UTF-8 for Python output
-set PYTHONUTF8=1
-set PYTHONIOENCODING=utf-8
 
 cd /d "%ROOT%src"
 "%PY%" demo.py %ARGS%
+if errorlevel 1 echo [ERROR] demo exited with code %errorlevel%
 echo.
 pause
 endlocal

@@ -1,26 +1,17 @@
 # 核心科学计算与数据处理
 numpy
 scipy
-pandas
 matplotlib
 scikit-learn
 wfdb
+Pillow
 
 # 深度学习（CPU 即可）
 torch
-torchvision
 
 # 模型导出与量化
 onnx
 onnxruntime
-
-# TFLite 导出（onnx2tf 路径；需同时安装 tf_keras / ai_edge_litert / sng4onnx / psutil）
-onnx2tf
-onnx_graphsurgeon
-tf_keras
-ai_edge_litert
-sng4onnx
-psutil
 
 # GUI
 PySide6
@@ -28,5 +19,6 @@ PySide6
 # BLE 接收（上位机连接端侧设备）
 bleak
 
-# 工具
-tqdm
+# TFLite/TensorFlow 导出链体积较大且仅导出时使用，
+# 请用 setup_env_uv.bat --export 或
+# run_pip.bat install -r requirements-export.txt 安装。

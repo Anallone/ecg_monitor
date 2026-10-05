@@ -1,0 +1,8 @@
+# 仅 TFLite / TensorFlow 导出需要。核心训练、推理、GUI 不需要。
+# 安装：run_pip.bat install -r requirements-export.txt
+onnx2tf
+onnx_graphsurgeon
+tf_keras
+ai_edge_litert
+sng4onnx
+psutil
