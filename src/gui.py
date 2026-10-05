@@ -750,14 +750,20 @@ class MainWindow(QMainWindow):
         """首帧显示后扫描可用数据集，尽量不阻塞窗口首次绘制。"""
         if self.datasets_loader is None:
             return
-        self.dataset_thread = DatasetLoaderThread(self.datasets_loader, self)
-        self.dataset_thread.setPriority(QThread.Priority.LowPriority)
-        self.dataset_thread.finished.connect(self._on_dataset_catalog_loaded)
-        self.dataset_thread.failed.connect(self._on_dataset_catalog_failed)
-        self.dataset_thread.start()
+        thread = DatasetLoaderThread(self.datasets_loader, self)
+        self.dataset_thread = thread
+        try:
+            thread.setPriority(QThread.Priority.LowPriority)
+        except Exception as exc:  # noqa: BLE001
+            _debug_log(f"_load_dataset_catalog: setPriority failed {exc}")
+        thread.finished.connect(self._on_dataset_catalog_loaded)
+        thread.failed.connect(self._on_dataset_catalog_failed)
+        _debug_log("_load_dataset_catalog: thread started")
+        thread.start()
 
     def _on_dataset_catalog_loaded(self, items):
         self.dataset_thread = None
+        _debug_log(f"_on_dataset_catalog_loaded: {len(items or [])} items")
         self.datasets = list(items or [])
         self.combo.clear()
         for label, _ in self.datasets:
@@ -786,6 +792,7 @@ class MainWindow(QMainWindow):
 
     def _on_dataset_catalog_failed(self, msg):
         self.dataset_thread = None
+        _debug_log(f"_on_dataset_catalog_failed: {msg.splitlines()[0]}")
         self.lbl_status.setText(f"⚠ 数据集扫描失败：{msg.splitlines()[0]}")
         self.lbl_status.setStyleSheet(
             f"color:{PALETTE['ALERT']}; font-size:12px; font-weight:bold;")
@@ -816,19 +823,26 @@ class MainWindow(QMainWindow):
             return
         self.lbl_status.setText(f"⏳ 正在加载 {label} …")
         self.lbl_status.setStyleSheet(f"color:{PALETTE['ALERT']}; font-size:14px;")
-        self.dataset_thread = DatasetLoaderThread(loader, self)
-        self.dataset_thread.setPriority(QThread.Priority.LowPriority)
-        self.dataset_thread.finished.connect(
+        thread = DatasetLoaderThread(loader, self)
+        self.dataset_thread = thread
+        try:
+            thread.setPriority(QThread.Priority.LowPriority)
+        except Exception as exc:  # noqa: BLE001
+            _debug_log(f"_load_selected: setPriority failed {exc}")
+        thread.finished.connect(
             lambda sig, _label=label: self._on_dataset_loaded(_label, sig))
-        self.dataset_thread.failed.connect(self._on_dataset_failed)
-        self.dataset_thread.start()
+        thread.failed.connect(self._on_dataset_failed)
+        _debug_log(f"_load_selected: loading {label}")
+        thread.start()
 
     def _on_dataset_loaded(self, label, sig):
         self.dataset_thread = None
+        _debug_log(f"_on_dataset_loaded: {label}")
         self._load(sig, label)
 
     def _on_dataset_failed(self, msg):
         self.dataset_thread = None
+        _debug_log(f"_on_dataset_failed: {msg.splitlines()[0]}")
         self.lbl_status.setText(f"⚠ 数据集加载失败：{msg.splitlines()[0]}")
         self.lbl_status.setStyleSheet(
             f"color:{PALETTE['ALERT']}; font-size:14px; font-weight:bold;")
