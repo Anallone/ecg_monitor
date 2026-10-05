@@ -29,12 +29,16 @@ echo ===== Build started =====> "%LOG%"
 if not exist "%PY%" (
     echo [ERROR] portable runtime not found: %PY%
     echo [ERROR] portable runtime not found: %PY%>> "%LOG%"
-    echo         Copy runtime\ from the work machine first (see docs\README_DEPLOY.md)
+    echo         Copy runtime\ from the work machine first, see docs\README_DEPLOY.md
     goto :fail
 )
 
 echo [1/5] Cleaning previous dist folder ...
 "%PY%" assemble_package.py --clean-dist >> "%LOG%" 2>&1
+if errorlevel 1 (
+    echo [ERROR] Clean previous dist folder failed. See %LOG% for details.
+    goto :fail
+)
 
 echo [2/5] Checking PyInstaller ...
 "%PY%" -m PyInstaller --version >nul 2>&1
