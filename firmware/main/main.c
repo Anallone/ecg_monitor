@@ -62,12 +62,11 @@
 static const char* TAG = "ECG";
 
 /* ── 实时采集（MAX30003）状态 ──
- * 只在首次进入实时页时尝试启动：驱动在探测失败时不会释放已初始化的 SPI 总线，
- * 重复启动会失败，故用 s_live_tried 记住「已尝试过」。 */
+ * 每次进入实时页都会重新初始化并启动前端；退出时完整停止并释放 SPI/中断/定时器，
+ * 因此退出再进入可正常重新采集（无需记住「是否尝试过」）。 */
 static ecg_source_t       s_live_src;
 static ecg_max30003_src_t s_live_m3;
 static ecg_filter_t       s_live_filter;
-static bool               s_live_tried = false;
 static bool               s_live_on = false;
 
 /* ========================================================================= */
@@ -282,10 +281,10 @@ void app_main(void) {
             if (tapped) {
                 switch (mode_tap(tx, ty)) {
                 case MODE_TAP_LIVE:                 /* 实时模式：与演示共用版式，数据源为采集前端 */
-                    if (!s_live_tried) {
-                        s_live_tried = true;
+                    if (!s_live_on) {
                         /* 原生 512 SPS → 重采样到 RT_FS(360)；scale 把 18-bit 满量程归一到 ±1。
-                         * 采集不到（未接模块）时保持空监测页，屏上显示「等待前端信号」。 */
+                         * 采集不到（未接模块）时保持空监测页，屏上显示「等待前端信号」。
+                         * 每次进入都重建源/滤波/引擎：退出时已完整 stop，重入必须重新初始化。 */
                         ecg_src_max30003_init(&s_live_src, &s_live_m3, 512, RT_FS,
                                               1.0f / 131072.0f);
                         if (ecg_max30003_start(&s_live_m3) == ESP_OK) {
@@ -296,7 +295,7 @@ void app_main(void) {
                             } else {
                                 /* 引擎起不来必须回收前端：s_live_on 恒为 false 会让
                                  * 退出路径跳过 ecg_max30003_stop，采集任务与 SPI3
-                                 * 会永久泄漏（且 s_live_tried 已置位，无法再重试） */
+                                 * 会永久泄漏。 */
                                 ecg_max30003_stop();
                                 ESP_LOGW(TAG, "实时引擎初始化失败，仅显示等待页");
                             }

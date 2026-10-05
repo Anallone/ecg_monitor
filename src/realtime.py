@@ -14,6 +14,51 @@ from preprocessing import bandpass_filter, notch_filter, pan_tompkins, zscore_no
 # 心率报警阈值（bpm）
 HR_HIGH = 100
 HR_LOW = 50
+# 心率平滑窗口：用最近 N 个有效 RR 间期的中位数换算心率，
+# 抑制单个早搏/漏检造成的瞬时跳变（与固件 RT_HR_MED_N 保持一致）。
+HR_MEDIAN_N = 7
+# 报警确认：心率需连续越界多少拍才真正触发报警（与固件 RT_HR_ALARM_CONFIRM 一致），
+# 避免噪声/单次干扰造成的误报警（实测噪声会让瞬时心率反复越过阈值）。
+HR_ALARM_CONFIRM = 3
+
+
+def _confirm_alarm(cand: int, cnt: int, hr: float) -> tuple[int, int, bool]:
+    """报警确认状态机：返回 (候选方向, 连续越界拍数, 是否已确认)。"""
+    cur = 1 if hr > HR_HIGH else (2 if hr < HR_LOW else 0)
+    if cur != 0 and cur == cand:
+        cnt += 1
+    else:
+        cand = cur
+        cnt = 1 if cur != 0 else 0
+    return cand, cnt, cnt >= HR_ALARM_CONFIRM
+
+
+class _RRMedian:
+    """最近 N 个有效 RR 间期的中位数窗口（上位机与固件逐字对齐）。"""
+
+    def __init__(self, n: int):
+        self.n = n
+        self.win = [0.0] * n
+        self.idx = 0
+        self.cnt = 0
+
+    def reset(self) -> None:
+        self.win = [0.0] * self.n
+        self.idx = 0
+        self.cnt = 0
+
+    def push(self, rr: float) -> None:
+        self.win[self.idx] = rr
+        self.idx = (self.idx + 1) % self.n
+        if self.cnt < self.n:
+            self.cnt += 1
+
+    def median(self) -> float | None:
+        if self.cnt == 0:
+            return None
+        vals = sorted(self.win[:self.cnt])
+        mid = self.cnt // 2
+        return vals[mid] if self.cnt % 2 else 0.5 * (vals[mid - 1] + vals[mid])
 
 
 class BeatClassifier:
@@ -86,23 +131,27 @@ class RealtimeEngine:
     def _reset(self):
         self.buffer = np.array([], dtype=np.float32)   # 滤波后的信号缓冲
         self.last_r = None
+        self.rr_med = _RRMedian(HR_MEDIAN_N)
+        self._alarm_cand = 0
+        self._alarm_cnt = 0
 
     def reset(self):
         """清空内部状态（供 GUI 每次重新分析前调用，避免缓冲累积）。"""
         self._reset()
 
     def _update_hr(self, r_peak: int) -> tuple[float | None, str | None]:
-        """由 R-R 间期计算瞬时心率，并判定报警。"""
+        """由最近若干个 R-R 间期的中位数计算心率，并判定报警。"""
         hr = None
         alarm = None
         if self.last_r is not None:
             rr = (r_peak - self.last_r) / self.fs
             if 0.2 < rr < 3.0:  # 合理范围 20–300 bpm
-                hr = 60.0 / rr
-                if hr > HR_HIGH:
-                    alarm = "high"
-                elif hr < HR_LOW:
-                    alarm = "low"
+                self.rr_med.push(rr)
+                hr = 60.0 / self.rr_med.median()
+                self._alarm_cand, self._alarm_cnt, confirmed = _confirm_alarm(
+                    self._alarm_cand, self._alarm_cnt, hr)
+                if confirmed:
+                    alarm = "high" if self._alarm_cand == 1 else "low"
         self.last_r = r_peak
         return hr, alarm
 
@@ -194,6 +243,7 @@ class StreamingEngine:
         # 流式模式：feed() 边到边算，用于 BLE 等不一次性给全的源。
         # False 时按批处理语义（load 一整段，末尾 tick 冲刷最后一拍）。
         self.streaming = False
+        self.rr_med = _RRMedian(HR_MEDIAN_N)
         self._reset_curve_state()
         self.reset()
 
@@ -337,6 +387,9 @@ class StreamingEngine:
         self.mean_rr = 1.0               # 与训练侧「无邻接 RR 回退 1.0」一致
         self.hr = 0.0
         self.alarm = 0
+        self._alarm_cand = 0
+        self._alarm_cnt = 0
+        self.rr_med.reset()
         self.counts = [0] * len(CLASSES)
 
     # ---- 查询 ----
@@ -416,8 +469,11 @@ class StreamingEngine:
                 self.rr_sum += rr
                 self.rr_cnt += 1
                 self.mean_rr = self.rr_sum / self.rr_cnt
-                self.hr = 60.0 / rr
-                self.alarm = 1 if self.hr > HR_HIGH else (2 if self.hr < HR_LOW else 0)
+                self.rr_med.push(rr)
+                self.hr = 60.0 / self.rr_med.median()
+                self._alarm_cand, self._alarm_cnt, confirmed = _confirm_alarm(
+                    self._alarm_cand, self._alarm_cnt, self.hr)
+                self.alarm = self._alarm_cand if confirmed else 0
         self.beats.append({"r": r, "class_idx": -1, "hr": self.hr, "alarm": self.alarm})
         self.last_r = r
 

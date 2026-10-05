@@ -102,6 +102,7 @@ static TaskHandle_t        s_task;
 static gptimer_handle_t    s_fclk_timer;
 static bool                s_int1_added = false;   /* INT1 中断是否已挂上（未挂时不得摘除，否则报 ISR 服务未安装） */
 static bool                s_fclk_level;
+static volatile bool       s_stop = false;         /* 采集任务退出标志（stop 后重入 start 时清零） */
 
 /* 输出 ~31.25kHz 方波到模块 FCLK（16us 半周期，GPTimer 中断翻转）。
  * 不采用 LEDC：ESP32-S3 的 LEDC 低速定时器共享同一全局时钟源，与 LCD 背光
@@ -360,15 +361,20 @@ static void m3_task(void* arg) {
     ecg_max30003_src_t* ctx = (ecg_max30003_src_t*)arg;
     ESP_LOGI(TAG, "采集任务启动，原生 %d Hz（INT1 中断驱动）", ctx->fs_native);
 
-    /* 复位/配置期间可能已有积压样本，先排空一次再进入中断等待。 */
+    /* 复位/配置期间可能已有积压样本，先排空一次再进入轮询等待。 */
     m3_drain_fifo(ctx);
 
-    for (;;) {
+    while (!s_stop) {
         /* 20ms 轮询 STATUS 排空 FIFO。相比单纯等 INT1 更稳：即使 INTB 边沿
          * 因重新上电/导联状态变化而丢失，也能在下一个轮询周期把数据取走。 */
         vTaskDelay(pdMS_TO_TICKS(20));
         m3_drain_fifo(ctx);
     }
+
+    /* 主动退出：先清句柄再自删除。m3_release() 看到 s_task==NULL 后才释放 SPI 总线，
+     * 避免「总线已初始化 / 设备仍在传输」的竞态，保证停止后能安全重入。 */
+    s_task = NULL;
+    vTaskDelete(NULL);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -388,6 +394,7 @@ static void m3_release(void);   /* 回收 start() 可能已获取的资源，供
  */
 esp_err_t ecg_max30003_start(ecg_max30003_src_t* ctx) {
     if (ctx == NULL) return ESP_ERR_INVALID_ARG;
+    s_stop = false;   /* 每次启动都清退出标志，支持停止后重入 */
 
     esp_err_t err = m3_bus_init();
     if (err != ESP_OK) {
@@ -433,8 +440,16 @@ void ecg_max30003_stop(void) {
  * 未创建的任务、未初始化的定时器/设备都跳过，未初始化的总线/中断只返回错误码。 */
 static void m3_release(void) {
     if (s_task) {
-        vTaskDelete(s_task);
-        s_task = NULL;
+        s_stop = true;
+        /* 等采集任务自行退出（任务每 20ms 一个循环，这里最多等 ~200ms），
+         * 任务退出时会把 s_task 置 NULL；随后再释放总线，避免释放时仍有传输。 */
+        for (int i = 0; i < 40 && s_task != NULL; i++) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
+        if (s_task) {                 /* 兜底：任务卡住则强制删除 */
+            vTaskDelete(s_task);
+            s_task = NULL;
+        }
     }
     /* 停 FCLK：GPTimer 不随任务/SPI 总线自动释放，不删会以 ~62.5kHz 的中断率
      * 空转下去（并持续翻转 IO6）。顺序按 IDF 惯例：stop → disable → del_timer。 */

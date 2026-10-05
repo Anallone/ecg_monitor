@@ -34,6 +34,38 @@ def preprocess_signal(sig: np.ndarray) -> np.ndarray:
     return sig.astype(np.float32)
 
 
+def causal_live_filter_sos(fs: int = FS) -> np.ndarray:
+    """端侧实时采集的因果滤波 SOS（须与 firmware/components/ecg_source/ecg_filter.c 保持一致）。
+
+    4 阶 Butterworth 0.5Hz 高通 + 4 阶 Butterworth 30Hz 低通 + 1 级 52.5Hz 陷波（Q=25）。
+    返回 shape (5, 6) 的 SOS，可直接用于 scipy.signal.sosfilt；每节 a0 已归一化为 1。
+    陷波中心按实测实时信号调参：工频干扰主峰在 52.5Hz（50Hz 处无峰）。
+    """
+    def bq(kind: str, fc: float, q: float) -> list[float]:
+        w0 = 2.0 * np.pi * fc / fs
+        cw = np.cos(w0)
+        sw = np.sin(w0)
+        alpha = sw / (2.0 * q)
+        a0 = 1.0 + alpha
+        if kind == "hp":
+            b0, b1, b2 = (1.0 + cw) / 2.0, -(1.0 + cw), (1.0 + cw) / 2.0
+        elif kind == "lp":
+            b0, b1, b2 = (1.0 - cw) / 2.0, 1.0 - cw, (1.0 - cw) / 2.0
+        else:  # notch
+            b0, b1, b2 = 1.0, -2.0 * cw, 1.0
+        a1 = -2.0 * cw
+        a2 = 1.0 - alpha
+        return [b0 / a0, b1 / a0, b2 / a0, 1.0, a1 / a0, a2 / a0]
+
+    return np.array([
+        bq("hp", 0.5, 0.54119610),
+        bq("hp", 0.5, 1.30656296),
+        bq("lp", 30.0, 0.54119610),
+        bq("lp", 30.0, 1.30656296),
+        bq("notch", 52.5, 25.0),
+    ])
+
+
 # ---------------------------------------------------------------------------
 # Pan-Tompkins R 峰检测（简化但稳健的实现）
 # ---------------------------------------------------------------------------

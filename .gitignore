@@ -47,3 +47,6 @@ firmware/sdkconfig.old
 
 # docs/ 作为独立的私有仓库单独管理，不纳入本仓库
 /docs/
+
+# 上位机运行时调试日志
+/ecg_monitor_debug.log

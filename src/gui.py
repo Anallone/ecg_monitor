@@ -1003,11 +1003,11 @@ class MainWindow(QMainWindow):
         self.ble_loss = 0.0
 
         # 演示会话的样本在设备端已滤波+z-score，直接喂；实时会话是原始值，由上位机因果滤波。
+        # 滤波系数与端侧 ecg_filter.c 一致，保证两端对同一实时流给出相同的检测结果。
         if self.ble_mode == MODE_LIVE:
-            from scipy.signal import butter, sosfilt_zi
-            sos_bp = butter(4, [0.5, 30.0], btype="band", fs=FS, output="sos")
-            sos_notch = butter(2, [49.0, 51.0], btype="bandstop", fs=FS, output="sos")
-            self.ble_sos = np.vstack([sos_bp, sos_notch])
+            from scipy.signal import sosfilt_zi
+            from preprocessing import causal_live_filter_sos
+            self.ble_sos = causal_live_filter_sos(FS)
             self.ble_zi = sosfilt_zi(self.ble_sos)
 
         self.engine.speed = 1.0
@@ -1350,8 +1350,8 @@ class MainWindow(QMainWindow):
         self._consume_new_beats(st["new_beats"])
 
         # 报警锁存：越界即锁存，直到点「确认报警」。
-        # 判据是引擎给的**瞬时心率**（60 / 最近一个 RR），因此单个早搏的短 RR
-        # 就足以越界；锁存后即使心率回落也继续显示，故记录极值以便用户理解成因。
+        # 判据是引擎给的**平滑心率**（最近 N 个 RR 中位数换算），单个早搏的短 RR
+        # 会被平滑掉；锁存后即使心率回落也继续显示，故记录极值以便用户理解成因。
         if st["alarm"] and not self.latched_alarm:
             self.latched_alarm = int(st["alarm"])
             self.alarm_hr_extreme = float(st.get("hr") or 0.0)

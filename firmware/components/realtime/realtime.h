@@ -12,8 +12,7 @@
  * 两种数据来源（共用同一套检测/分类代码，仅取数方式不同）：
  *   - 回放（rt_init）：整段常驻 RAM，绝对下标；样本为预滤波+zscore。
  *   - 直播（rt_init_live + rt_feed）：无限流 + 有界环形缓冲；样本来自 MAX30003，
- *     只有 AFE 硬件滤波（DHPF/DLPF），**未做数字滤波**——工频哼声等可能影响检测，
- *     后续需要再在采集层加陷波。
+ *     采集层已做数字滤波（0.5–30Hz 带通 + 50Hz 陷波，见 ecg_filter.h）后再喂入。
  */
 #ifndef REALTIME_H
 #define REALTIME_H
@@ -34,6 +33,10 @@ extern "C" {
 /* 心率报警阈值（bpm），与 src/realtime.py 的 HR_HIGH / HR_LOW 一致 */
 #define RT_HR_HIGH   100
 #define RT_HR_LOW    50
+/* 心率平滑窗口：最近 N 个有效 RR 间期的中位数，与 src/realtime.py 的 HR_MEDIAN_N 一致 */
+#define RT_HR_MED_N  7
+/* 报警确认：心率连续越界多少拍才触发报警，与 src/realtime.py 的 HR_ALARM_CONFIRM 一致 */
+#define RT_HR_ALARM_CONFIRM 3
 
 #define RT_MAX_BEATS 512
 
@@ -80,6 +83,12 @@ typedef struct {
     float    mean_rr;       /* 运行平均 RR（秒） */
     float    hr;            /* 最近一次心率（bpm），0=未知 */
     int      alarm;         /* 最近一次报警：0/1/2 */
+    int      alarm_cand;    /* 报警候选方向（0/1/2） */
+    int      alarm_cnt;     /* 该候选方向连续越界拍数 */
+    /* 心率平滑：最近 RT_HR_MED_N 个有效 RR 间期的中位数窗口 */
+    float    rr_win[RT_HR_MED_N];
+    int      rr_win_idx;
+    int      rr_win_cnt;
 
     /* 心拍 */
     rt_beat_t beats[RT_MAX_BEATS];

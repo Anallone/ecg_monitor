@@ -176,6 +176,11 @@ void rt_reset(rt_engine_t* e) {
     e->mean_rr = 1.0f;
     e->hr = 0.0f;
     e->alarm = 0;
+    e->alarm_cand = 0;
+    e->alarm_cnt = 0;
+    e->rr_win_idx = 0;
+    e->rr_win_cnt = 0;
+    memset(e->rr_win, 0, sizeof(e->rr_win));
     e->n_beats = 0;
     e->n_classified = 0;
     memset(e->cls_count, 0, sizeof(e->cls_count));
@@ -197,18 +202,56 @@ float rt_progress(const rt_engine_t* e) {
 /* ------------------------------------------------------------------------- */
 /* R 峰确认：更新心率/报警，入队                                                      */
 /* ------------------------------------------------------------------------- */
+/* 心率平滑窗口：只保留最近 RT_HR_MED_N 个有效 RR，取中位数抑制单个早搏/漏检的跳变 */
+static void rr_win_push(rt_engine_t* e, float rr) {
+    e->rr_win[e->rr_win_idx] = rr;
+    e->rr_win_idx = (e->rr_win_idx + 1) % RT_HR_MED_N;
+    if (e->rr_win_cnt < RT_HR_MED_N) e->rr_win_cnt++;
+}
+
+static float rr_win_median(const rt_engine_t* e) {
+    int n = e->rr_win_cnt;
+    if (n <= 0) return 0.0f;
+
+    float v[RT_HR_MED_N];
+    memcpy(v, e->rr_win, (size_t)n * sizeof(float));
+    /* 插入排序：n 固定为 RT_HR_MED_N（5），开销可忽略 */
+    for (int i = 1; i < n; i++) {
+        float key = v[i];
+        int j = i - 1;
+        while (j >= 0 && v[j] > key) {
+            v[j + 1] = v[j];
+            j--;
+        }
+        v[j + 1] = key;
+    }
+    int mid = n / 2;
+    return (n % 2) ? v[mid] : 0.5f * (v[mid - 1] + v[mid]);
+}
+
 static void on_r_detected(rt_engine_t* e, int r) {
     if (e->n_beats >= RT_MAX_BEATS) return;
 
     /* 心率 / 报警：立即更新，不延迟 */
     if (e->last_r >= 0) {
         float rr = (float)(r - e->last_r) / (float)e->fs;
+        float med;
         if (rr > 0.2f && rr < 3.0f) {          /* 20~300 bpm */
             e->rr_sum += rr;
             e->rr_cnt++;
             e->mean_rr = e->rr_sum / (float)e->rr_cnt;
-            e->hr = 60.0f / rr;
-            e->alarm = (e->hr > RT_HR_HIGH) ? 1 : ((e->hr < RT_HR_LOW) ? 2 : 0);
+            rr_win_push(e, rr);
+            med = rr_win_median(e);
+            e->hr = (med > 1e-6f) ? 60.0f / med : 0.0f;
+            /* 报警确认：连续 RT_HR_ALARM_CONFIRM 拍越界才触发，抑制噪声误报 */
+            int cur = (e->hr > RT_HR_HIGH) ? 1 : ((e->hr < RT_HR_LOW) ? 2 : 0);
+            if (cur != 0 && cur == e->alarm_cand) {
+                e->alarm_cnt++;
+            } else {
+                e->alarm_cand = cur;
+                e->alarm_cnt = (cur != 0) ? 1 : 0;
+            }
+            e->alarm = (e->alarm_cnt >= RT_HR_ALARM_CONFIRM) ? e->alarm_cand : 0;
         }
     }
 

@@ -2,9 +2,10 @@
 #define ECG_FILTER_H
 
 /* 端侧实时数字滤波（用于屏幕显示与推理，不用于 BLE 上传）。
- * 因果 IIR 级联：2 级 0.5Hz 高通 + 2 级 30Hz 低通 + 1 级 50Hz 陷波。
- * 依据真实 BLE 原始数据优化：把低通从 45Hz 降到 30Hz 后，52Hz 附近
- * 的采集干扰被显著抑制，R-R 抖动明显下降。 */
+ * 因果 IIR 级联：4 阶 0.5Hz 高通 + 4 阶 30Hz 低通 + 1 级 52.5Hz 陷波（Q=25）。
+ * 与上位机 live 滤波（preprocessing.causal_live_filter_sos）保持一致。
+ * 按实测 BLE 原始信号调参：工频干扰主峰在 52.5Hz（50Hz 处无峰），
+ * 故陷波中心定在 52.5Hz；30Hz 低通同时抑制 105/157.5Hz 谐波。 */
 
 #include <stdint.h>
 
