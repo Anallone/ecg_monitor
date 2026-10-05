@@ -28,6 +28,13 @@
 `./.venv/Scripts/python` 即可。Windows 下建议先双击 `check_env.bat` 自检，
 它会自动识别便携运行时与本地 venv，并指出缺失项。
 
+### 快速开始
+
+1. 双击 `check_env.bat`，按提示补全 `runtime\` 或 `.venv`；
+2. 双击 `run_gui.bat` 启动 GUI，或双击 `run_demo.bat` 运行命令行演示；
+3. 若两处解释器都没有，联网双击 `setup_env_uv.bat` 重建核心环境；
+   需要 TFLite/TensorFlow 导出时再加参数 `--export`。
+
 ### 方式 A：便携运行时（个人机推荐，免配置、免联网）
 
 `runtime/` 是自包含的 Python 3.11 + 全部依赖（约 3.9 GB），解压即用：
