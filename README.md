@@ -1,7 +1,5 @@
 # 轻量级可穿戴 ECG 实时心律失常监测系统
 
-综合设计 · 预选题第 13 题 · 端侧部署主线（微雪 ESP32-S3）
-
 ## 目标与最终结果
 
 | 指标 | 目标 | 实际 |
@@ -13,11 +11,11 @@
 | PyQt GUI 演示 | ✅ | 已实现（浅莫兰迪配色，实时滚动波形，与端侧同构的因果流式引擎） |
 | ESP32-S3 端侧部署 | ✅ | 固件构建通过并实机运行（438 KB bin） |
 
-> **完整指标、混淆矩阵见 [`models/res_se_cnn_rr4_metrics.json`](models/res_se_cnn_rr4_metrics.json)；部署与实验说明见 [`docs/report/REPORT.md`](docs/report/REPORT.md)。**
+> **完整指标、混淆矩阵见 [`models/res_se_cnn_rr4_metrics.json`](models/res_se_cnn_rr4_metrics.json)。**
 >
 > 说明：94.30% 由占测试集约 88% 的 N 类主导；S/F/Q 跨患者少数类召回率仍然偏低，
 > 是轻量模型（37,445 参数、int8 38.79 KB）在 MIT-BIH 跨患者设置下的已知难点
-> （详见报告 §4）。模型选型遵循任务书 <50 KB 硬约束：在该约束内用残差连接 +
+> 模型选型以满足 int8 体积 <50 KB 为目标：在该约束内用残差连接 +
 > 通道注意力（SE）与 4 维 RR 特征把存储余量用足，故由早期 7.21 KB 的基线升级为
 > 38.79 KB 的主线。
 
@@ -45,7 +43,7 @@
 
 Windows 下可直接双击 `run_gui.bat` / `run_demo.bat`。
 `runtime/` 体积过大**未纳入 git**，需从工作机拷贝一次
-（见 [`docs/README_DEPLOY.md`](docs/README_DEPLOY.md)）。
+（部署说明见独立私有仓库 `ecg_monitor_docs` 的 `README_DEPLOY.md`）。
 
 ### 方式 B：自建 venv（开发机）
 
@@ -72,7 +70,7 @@ setup_env_uv.bat --export
 ├── processed/        # 预处理后的 numpy 缓存（windows/labels/rrfeat）
 ├── models/           # 权重、指标 JSON
 ├── export/           # ONNX / int8 C 导出
-├── docs/             # 文档/设计子项目（独立 git 仓库）：文档、报告、PPT、任务书、实物照片等
+├── docs/             # 独立文档仓库：部署说明、实现报告、硬件资料与实物照片等
 ├── src/              # Python 源码
 │   ├── config.py         # 全局配置 + AAMI 映射
 │   ├── data_loader.py    # wfdb 读取 + 心拍提取 + RR 特征
@@ -135,17 +133,17 @@ setup_env_uv.bat --export
 ./runtime/python/python.exe tools/verify_c_export.py --model res_se_cnn_rr4   # C 导出 vs PyTorch
 ./runtime/python/python.exe tools/verify_onnx.py --model res_se_cnn_rr4       # ONNX Runtime vs PyTorch
 ./runtime/python/python.exe tools/check_gui_contrast.py                  # GUI 配色对比度
-./runtime/python/python.exe tools/make_figures.py                        # 报告插图（输出到 docs/report/figures）
+./runtime/python/python.exe tools/make_figures.py                        # 文档插图（输出到 docs/report/figures）
 ```
 
-## 仓库拆分
+## 文档仓库说明
 
-本仓库仅保留代码、数据、模型与打包配置。文档、报告、答辩 PPT 与设计隐私材料已统一
-放入 `docs/` 这一独立子项目（独立 git 仓库，不入主仓库；如需可再接入为 git submodule）。
+本仓库仅保留代码、数据、模型与打包配置。文档、实现说明与硬件/实物资料已统一
+放入独立仓库 `ecg_monitor_docs`（本地目录 `docs/`），不纳入主仓库。
 
-`docs/` 内含 `README_DEPLOY.md`、`report/`、`references/`、`CJMCU-30003 资料/`、
-报告模板、设计计划、任务书、答辩 PPT，以及含姓名/学号/实物照片的隐私材料。
-因含个人信息，`docs/` 远程仓库请保持私有；本仓库 `.gitignore` 已忽略该目录。
+`docs/` 内含 `README_DEPLOY.md`、`report/`、`references/`、`CJMCU-30003 资料/`
+及实物照片等资料。因可能含个人信息，`ecg_monitor_docs` 请保持私有；
+本仓库 `.gitignore` 已忽略 `docs/`。
 
 ## 打包成 exe（Windows）
 
