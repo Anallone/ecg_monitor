@@ -20,6 +20,10 @@ HR_MEDIAN_N = 7
 # 报警确认：心率需连续越界多少拍才真正触发报警（与固件 RT_HR_ALARM_CONFIRM 一致），
 # 避免噪声/单次干扰造成的误报警（实测噪声会让瞬时心率反复越过阈值）。
 HR_ALARM_CONFIRM = 3
+# 信号质量门限（导联脱落检测）：滤波后信号在 SIG_WIN 内的峰峰幅低于此值判为无信号。
+# 与固件 RT_SIG_WIN / RT_SIG_P2P_MIN 一致；阈值按真实 BLE 记录标定，可按需再调。
+SIG_WIN = 720
+SIG_P2P_MIN = 0.008
 
 
 def _confirm_alarm(cand: int, cnt: int, hr: float) -> tuple[int, int, bool]:
@@ -329,6 +333,17 @@ class StreamingEngine:
         for j in range(m):
             i = n0 + j
             cur = float(samples[j])
+            # 信号质量：维护 SIG_WIN 内的峰峰幅（导联脱落检测）
+            if cur < self.sig_min:
+                self.sig_min = cur
+            if cur > self.sig_max:
+                self.sig_max = cur
+            self.sig_cnt += 1
+            if self.sig_cnt >= SIG_WIN:
+                self.signal_ok = (self.sig_max - self.sig_min) >= SIG_P2P_MIN
+                self.sig_min = float("inf")
+                self.sig_max = float("-inf")
+                self.sig_cnt = 0
             prev = float(self.sig[i - 1]) if i > 0 else cur
             d = cur - prev
             self._acc += d * d
@@ -391,6 +406,10 @@ class StreamingEngine:
         self._alarm_cnt = 0
         self.rr_med.reset()
         self.counts = [0] * len(CLASSES)
+        self.signal_ok = True
+        self.sig_min = float("inf")
+        self.sig_max = float("-inf")
+        self.sig_cnt = 0
 
     # ---- 查询 ----
     @property
@@ -417,7 +436,8 @@ class StreamingEngine:
             # 流式会话开始时 sig 是空的（begin_stream 置零缓冲、等 feed），此时 tick
             # 仍要返回与正常路径同构的字典，否则 GUI 里 st["alarm"]/st["hr"] 会 KeyError。
             return {"new_beats": [], "pos": 0, "hr": self.hr, "alarm": self.alarm,
-                    "counts": list(self.counts), "finished": True}
+                    "counts": list(self.counts), "finished": True,
+                    "signal_ok": self.signal_ok}
 
         n = len(self.sig)
         step = max(1, int(self.speed * self.fs * tick_ms / 1000))
@@ -428,10 +448,24 @@ class StreamingEngine:
         frm = self.pos
         to = min(self.pos + step, limit)
 
+        # 信号质量差（导联脱落）：清心率/报警与检测状态，下面跳过峰值检测
+        if self.streaming and not self.signal_ok:
+            self.hr = 0.0
+            self.alarm = 0
+            self._alarm_cand = 0
+            self._alarm_cnt = 0
+            self.last_r = -1
+            self.rr_med.reset()
+            self.rr_sum = 0.0
+            self.rr_cnt = 0
+            self.mean_rr = 1.0
+
         if frm < to:
             integ, thr, sig = self.integ, self.thr, self.sig
             for i in range(frm, to):
                 if i < WARMUP:
+                    continue
+                if self.streaming and not self.signal_ok:
                     continue
                 pm = integ[i - 1]
                 # 确认 i-1 是否为峰：需要 i 作为右邻（1 点延迟，因果）
@@ -458,6 +492,7 @@ class StreamingEngine:
             "alarm": self.alarm,
             "counts": list(self.counts),
             "finished": self.finished,
+            "signal_ok": self.signal_ok,
         }
 
     # ---- 内部 ----

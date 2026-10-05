@@ -368,10 +368,25 @@ int rt_tick(rt_engine_t* e, int tick_ms) {
         for (int i = wstart; i < from; i++) thr_win_push(&w, integ_at(e, i));
     }
 
+    /* 信号质量差（导联脱落）：清心率/报警与检测状态，下面的循环跳过峰值检测 */
+    if (e->live && !e->signal_ok) {
+        e->hr = 0.0f;
+        e->alarm = 0;
+        e->alarm_cand = 0;
+        e->alarm_cnt = 0;
+        e->last_r = -1;
+        e->rr_win_idx = 0;
+        e->rr_win_cnt = 0;
+        e->rr_sum = 0.0f;
+        e->rr_cnt = 0;
+        e->mean_rr = 1.0f;
+    }
+
     /* 逐采样推进：喂阈值窗 + 因果峰值检测 */
     for (int i = from; i < to; i++) {
         thr_win_push(&w, integ_at(e, i));
         if (i < RT_WARMUP) continue;
+        if (e->live && !e->signal_ok) continue;
 
         e->thr = thr_win_value(&w);
         if (e->thr < 1e-9f) e->thr = 1e-9f;
@@ -438,6 +453,10 @@ int rt_init_live(rt_engine_t* e, int fs, int speed, int cap) {
     e->last_r = -1;
     e->mean_rr = 1.0f;      /* 与训练侧「无邻接 RR 回退 1.0」一致 */
     e->live = true;
+    e->signal_ok = true;    /* 预热期先乐观，首个 RT_SIG_WIN 窗结算后再判定 */
+    e->sig_min = 1e30f;
+    e->sig_max = -1e30f;
+    e->sig_cnt = 0;
 
     e->sig_ring = (float*)malloc((size_t)cap * sizeof(float));
     e->integ_ring = (float*)malloc((size_t)cap * sizeof(float));
@@ -462,6 +481,16 @@ void rt_feed(rt_engine_t* e, const float* samples, int cnt) {
         int i = e->n;
         float cur = samples[k];
         e->sig_ring[i & (e->sig_cap - 1)] = cur;
+
+        /* 信号质量：维护 RT_SIG_WIN 内的峰峰幅（导联脱落检测） */
+        if (cur < e->sig_min) e->sig_min = cur;
+        if (cur > e->sig_max) e->sig_max = cur;
+        if (++e->sig_cnt >= RT_SIG_WIN) {
+            e->signal_ok = (e->sig_max - e->sig_min) >= RT_SIG_P2P_MIN;
+            e->sig_min = 1e30f;
+            e->sig_max = -1e30f;
+            e->sig_cnt = 0;
+        }
 
         /* 因果积分：尾随 RT_MA_WIN 个 diff² 的均值，逐样本滚动（同 build_integrated） */
         float prev = (i > 0) ? sig_at(e, i - 1) : cur;

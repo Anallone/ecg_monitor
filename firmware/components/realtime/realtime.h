@@ -37,6 +37,10 @@ extern "C" {
 #define RT_HR_MED_N  7
 /* 报警确认：心率连续越界多少拍才触发报警，与 src/realtime.py 的 HR_ALARM_CONFIRM 一致 */
 #define RT_HR_ALARM_CONFIRM 3
+/* 信号质量门限（导联脱落检测）：滤波后信号在 RT_SIG_WIN 内的峰峰幅低于此值判为无信号。
+ * 与 src/realtime.py 的 SIG_WIN / SIG_P2P_MIN 一致；阈值按真实 BLE 记录标定，可按需再调。 */
+#define RT_SIG_WIN      720    /* 2s @360Hz */
+#define RT_SIG_P2P_MIN  0.008f
 
 #define RT_MAX_BEATS 512
 
@@ -89,6 +93,11 @@ typedef struct {
     float    rr_win[RT_HR_MED_N];
     int      rr_win_idx;
     int      rr_win_cnt;
+    /* 信号质量（live）：滤波后信号峰峰幅 */
+    float    sig_min;
+    float    sig_max;
+    int      sig_cnt;
+    bool     signal_ok;
 
     /* 心拍 */
     rt_beat_t beats[RT_MAX_BEATS];
