@@ -104,7 +104,10 @@ static bool                s_int1_added = false;   /* INT1 中断是否已挂上
 static bool                s_fclk_level;
 static volatile bool       s_stop = false;         /* 采集任务退出标志（stop 后重入 start 时清零） */
 
-/* 输出 ~31.25kHz 方波到模块 FCLK（16us 半周期，GPTimer 中断翻转）。
+/* 输出 ~32.79kHz 方波到模块 FCLK（610×25ns=15.25us 半周期，GPTimer 中断翻转）。
+ * MAX30003 需要 32.768kHz 主时钟；ESP32-S3 GPTimer 预分频须 >=2，80MHz APB 源下
+ * 最高只能取 40MHz 分辨率。610 个 tick 最接近半周期，误差约 +0.06%。
+ * 旧实现用 1MHz+16us=31.25kHz，误差达 -4.6%，会把心率整体抬高约 4.9%。
  * 不采用 LEDC：ESP32-S3 的 LEDC 低速定时器共享同一全局时钟源，与 LCD 背光
  * 的 APB 时钟源冲突（32768Hz 会要求 XTAL 源）。GPTimer 独立，避开该限制。 */
 static bool IRAM_ATTR m3_fclk_alarm_cb(gptimer_handle_t timer,
@@ -126,12 +129,12 @@ static void m3_fclk_init(void) {
     gptimer_config_t cfg = {
         .clk_src = GPTIMER_CLK_SRC_DEFAULT,
         .direction = GPTIMER_COUNT_UP,
-        .resolution_hz = 1 * 1000 * 1000,   /* 1MHz -> 1us 计数分辨率 */
+        .resolution_hz = 40 * 1000 * 1000,  /* 40MHz -> 25ns（80MHz 源 2 分频） */
     };
     gptimer_new_timer(&cfg, &s_fclk_timer);
 
     gptimer_alarm_config_t alarm = {
-        .alarm_count = 16,                   /* 每 16us 翻转一次 -> ~31.25kHz 方波 */
+        .alarm_count = 610,                  /* 610×25ns=15.25us 半周期 -> ~32.79kHz */
         .reload_count = 0,
         .flags.auto_reload_on_alarm = true,
     };
@@ -141,7 +144,7 @@ static void m3_fclk_init(void) {
     gptimer_register_event_callbacks(s_fclk_timer, &cbs, NULL);
     gptimer_enable(s_fclk_timer);
     gptimer_start(s_fclk_timer);
-    ESP_LOGI(TAG, "FCLK out on IO%d @~31.25kHz", M3_PIN_FCLK);
+    ESP_LOGI(TAG, "FCLK out on IO%d @~32.79kHz", M3_PIN_FCLK);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -451,7 +454,7 @@ static void m3_release(void) {
             s_task = NULL;
         }
     }
-    /* 停 FCLK：GPTimer 不随任务/SPI 总线自动释放，不删会以 ~62.5kHz 的中断率
+    /* 停 FCLK：GPTimer 不随任务/SPI 总线自动释放，不删会以 ~65.5kHz 的中断率
      * 空转下去（并持续翻转 IO6）。顺序按 IDF 惯例：stop → disable → del_timer。 */
     if (s_fclk_timer) {
         gptimer_stop(s_fclk_timer);

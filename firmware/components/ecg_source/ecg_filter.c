@@ -64,10 +64,10 @@ void ecg_filter_init(ecg_filter_t* f, int fs) {
     biquad_init_hp(&f->bq[1], 0.5f, (float)fs, 1.30656296f);
     biquad_init_lp(&f->bq[2], 30.0f, (float)fs, 0.54119610f);
     biquad_init_lp(&f->bq[3], 30.0f, (float)fs, 1.30656296f);
-    /* 陷波按实测实时信号调到 52.5Hz：原始 BLE 记录里工频干扰主峰在
-     * 52.47~52.52Hz（并带 105/157.5Hz 谐波），50Hz 处无峰。Q=25 对应 -3dB
-     * 带宽约 2.1Hz（51.4~53.6Hz），覆盖观测到的峰。 */
-    biquad_init_notch(&f->bq[4], 52.5f, (float)fs, 25.0f);
+    /* 50Hz 工频陷波：Q=25 对应 -3dB 带宽约 2Hz（49~51Hz）。
+     * 此前实测的 52.5Hz 主峰是 FCLK 频率错误把 50Hz 搬移所致；FCLK 修正后
+     * 工频回到 50Hz，陷波中心也应回到 50Hz。 */
+    biquad_init_notch(&f->bq[4], 50.0f, (float)fs, 25.0f);
 }
 
 static float biquad_step(ecg_biquad_t* bq, float x) {
