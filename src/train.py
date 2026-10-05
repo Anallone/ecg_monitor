@@ -260,7 +260,7 @@ def train(model_name: str, sampler: str = "augov", epochs: int = EPOCHS,
     model = build_model(model_name).to(device)
     if init_weights:
         print(f"加载初始权重: {init_weights}")
-        pretrained = torch.load(init_weights, map_location=device)
+        pretrained = torch.load(init_weights, map_location=device, weights_only=True)
         model_dict = model.state_dict()
         transfer = {k: v for k, v in pretrained.items()
                     if k in model_dict and v.shape == model_dict[k].shape}
@@ -392,7 +392,7 @@ def train(model_name: str, sampler: str = "augov", epochs: int = EPOCHS,
           f"(acc={best_acc:.4f}, f1={best_f1:.4f})")
 
     # 在测试集上评估最佳模型
-    model.load_state_dict(torch.load(ckpt, map_location=device))
+    model.load_state_dict(torch.load(ckpt, map_location=device, weights_only=True))
     X_te, y_te, rr_te = load_split("test", processed_path)
     y_te_idx = y_te.astype(np.int64)
     test_loader = DataLoader(BeatDataset(X_te, y_te_idx, rr_te), batch_size=BATCH_SIZE,

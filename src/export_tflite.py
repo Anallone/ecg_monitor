@@ -10,9 +10,8 @@
 - 本项目「权威」int8 体积仍以 C 导出路径为准（export/c_model，~7.2 KB，已逐位验证）；
   TFLite int8 作为端侧推理框架对照指标，供报告引用。
 
-依赖：
-    ./runtime/python/python.exe -m pip install onnx2tf onnx_graphsurgeon tf_keras \
-        ai_edge_litert sng4onnx psutil tensorflow
+依赖（已拆分为 `requirements-export.txt`）：
+    ..\run_pip.bat install -r ..\requirements-export.txt
 
 用法（在 src 目录）:
     ../runtime/python/python.exe export_tflite.py --model res_se_cnn_rr4 --verify
@@ -119,7 +118,7 @@ def verify_tflite(model_name: str, path: Path | None = None):
     inmap = {d["name"].split("serving_default_")[-1].split(":")[0]: d for d in inds}
 
     model = build_model(model_name)
-    model.load_state_dict(torch.load(MODEL_DIR / f"{model_name}_best.pt", map_location="cpu"))
+    model.load_state_dict(torch.load(MODEL_DIR / f"{model_name}_best.pt", map_location="cpu", weights_only=True))
     model.eval()
     use_rr = bool(getattr(model, "rr_features", False))
 

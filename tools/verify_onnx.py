@@ -29,7 +29,7 @@ def main():
     out_name = sess.get_outputs()[0].name
 
     model = build_model(args.model)
-    model.load_state_dict(torch.load(MODEL_DIR / f"{args.model}_best.pt", map_location="cpu"))
+    model.load_state_dict(torch.load(MODEL_DIR / f"{args.model}_best.pt", map_location="cpu", weights_only=True))
     model.eval()
     use_rr = bool(getattr(model, "rr_features", False))
 

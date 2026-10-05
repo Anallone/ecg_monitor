@@ -414,7 +414,7 @@ def load_weights(model, path) -> None:
     checkpoint 没有它，缺失时回退为 0（即不做先验校正），其余键必须完全匹配——
     只放行这一个已知的可选项，避免掩盖真正的结构不一致。
     """
-    sd = torch.load(path, map_location="cpu")
+    sd = torch.load(path, map_location="cpu", weights_only=True)
     missing, unexpected = model.load_state_dict(sd, strict=False)
     extra = set(missing) - {"logit_bias"}
     if extra or unexpected:

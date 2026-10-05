@@ -32,7 +32,7 @@ def export_onnx(model_name: str, dynamic_batch: bool = False):
     import onnx
 
     model = build_model(model_name)
-    model.load_state_dict(torch.load(MODEL_DIR / f"{model_name}_best.pt", map_location="cpu"))
+    model.load_state_dict(torch.load(MODEL_DIR / f"{model_name}_best.pt", map_location="cpu", weights_only=True))
     model.eval()
 
     path = EXPORT_DIR / f"{model_name}.onnx"
@@ -159,7 +159,7 @@ def measure_model(model_name: str):
     import onnx
 
     model = build_model(model_name)
-    model.load_state_dict(torch.load(MODEL_DIR / f"{model_name}_best.pt", map_location="cpu"))
+    model.load_state_dict(torch.load(MODEL_DIR / f"{model_name}_best.pt", map_location="cpu", weights_only=True))
     model.eval()
 
     n_params = count_parameters(model)

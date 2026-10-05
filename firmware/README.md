@@ -114,9 +114,9 @@ idf.bat build
 PowerShell 等价：`powershell -ExecutionPolicy Bypass -File firmware\idf.ps1 build`；
 VS Code 里直接 `Ctrl+Shift+B`（任务名 "ESP-IDF: build"）。
 
-> 本机实测（2026-09-12）：ESP-IDF v5.5.1 在 `D:\esp\v5.5.1\esp-idf`，
-> 工具链与 IDF 的 Python 环境在 `D:\esp\.espressif`（xtensa-esp-elf 14.2.0），
-> IDF 专用 Python 3.11.9 在 `D:\esp\Python311`（系统默认的 Anaconda 是 3.7，太旧，不能用）。
+> 示例安装路径：ESP-IDF 位于 `D:\esp\v5.5.1\esp-idf`，工具链与 IDF 的 Python
+> 环境位于 `D:\esp\.espressif`（xtensa-esp-elf 14.2.0）。
+> `firmware\idf.bat` / `firmware\idf.ps1` 会自动探测，换机器无需改脚本。
 > 构建产物 `build/ecg_monitor.bin` ≈ 698 KB（app 分区 1 MB，余量 32%）。
 
 ## 烧录与监视
@@ -208,11 +208,11 @@ idf.py -p COMx flash monitor
 
 ## 与 maincontrol 参考工程的关系
 
-- LCD 驱动 `components/lcd/lcd.c` 直接复用
-  `C:\Users\ths44\FounDian\maincontrol-fixture_esp\maincontrol\application\lcd\lcd.c`，
+- LCD 驱动 `components/lcd/lcd.c` 直接复用参考工程 `maincontrol-fixture_esp`
+  中的 `maincontrol/application/lcd/lcd.c`，
   仅移除 `initcall.h` 依赖与 `SERVICE_INITCALL` 注册，改为由 `main.c` 显式调用
   `lcd_init()`。
 - 触摸芯片型号、屏初始化时序（RGB 顺序、小端、RST 受控复位）均已在该工程实测，
   无需重查数据手册。
-- ESP-IDF v5.5.1 工具链已就绪：本体 `D:\esp\v5.5.1\esp-idf`，工具链 `D:\esp\.espressif`，
-  引导脚本 `firmware\idf.bat` / `firmware\idf.ps1`（详见 `../docs/README_DEPLOY.md` 第 4 节）。
+- ESP-IDF v5.5.1 工具链已就绪，引导脚本 `firmware\idf.bat` / `firmware\idf.ps1`
+  会自动定位安装位置（详见 `../docs/README_DEPLOY.md` 第 4 节）。
