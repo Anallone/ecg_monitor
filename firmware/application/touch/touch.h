@@ -11,6 +11,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#define TOUCH_TAP_SLOP_PX 12
+#define TOUCH_TAP_MAX_MS  600
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -20,12 +23,23 @@ extern "C" {
  * 除「点按」上报外，还带上按下起点坐标，供列表页做上下滑动——
  * 这样手势页与其他页共用同一份 I2C 读数，不必各自再调一次 lcd_touch_read。
  */
+typedef enum {
+    TOUCH_GESTURE_NONE = 0,
+    TOUCH_GESTURE_TAP,
+    TOUCH_GESTURE_SWIPE,
+} touch_gesture_t;
+
 typedef struct {
     bool     press;    /* 本 tick 按下沿 */
     bool     down;     /* 当前按住 */
     bool     up;       /* 本 tick 抬起 */
     uint16_t x, y;     /* 最后一次有效触点坐标（抬手后保持按下期间的最后值） */
     uint16_t x0, y0;   /* 本次按下的起点坐标 */
+    uint16_t max_dx;   /* 本次按压期间相对起点的最大横向位移 */
+    uint16_t max_dy;   /* 本次按压期间相对起点的最大纵向位移 */
+    uint32_t down_tick;
+    uint32_t duration_ms;
+    touch_gesture_t gesture;
 } touch_state_t;
 
 /**

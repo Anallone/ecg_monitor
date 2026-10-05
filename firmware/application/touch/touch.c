@@ -3,6 +3,8 @@
  */
 #include "touch.h"
 
+#include <stdlib.h>
+
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -17,14 +19,19 @@ bool touch_poll(uint16_t* x, uint16_t* y) {
     uint16_t tx = 0, ty = 0;
     if (lcd_touch_read(&pressed, &tx, &ty) != ESP_OK) return false;
 
+    uint32_t now = xTaskGetTickCount();
     bool edge = pressed && !s_touch_last;
     bool tap = false;
     if (edge) {
         /* tick 域比较：×portTICK_PERIOD_MS 换算 ms 会在约 497 天后 uint32 溢出、
          * 去抖失效；有符号差值比较在回绕下依然正确（250ms 远小于 2^31 tick）。 */
-        uint32_t now = xTaskGetTickCount();
         s_touch.x0 = tx;
         s_touch.y0 = ty;
+        s_touch.max_dx = 0;
+        s_touch.max_dy = 0;
+        s_touch.down_tick = now;
+        s_touch.duration_ms = 0;
+        s_touch.gesture = TOUCH_GESTURE_NONE;
         if ((int32_t)(now - s_last_tap_tick) > pdMS_TO_TICKS(250)) {
             tap = true;
             s_last_tap_tick = now;
@@ -41,6 +48,23 @@ bool touch_poll(uint16_t* x, uint16_t* y) {
     if (pressed) {
         s_touch.x = tx;
         s_touch.y = ty;
+        int dx = abs((int)tx - (int)s_touch.x0);
+        int dy = abs((int)ty - (int)s_touch.y0);
+        if (dx > (int)s_touch.max_dx) s_touch.max_dx = (uint16_t)dx;
+        if (dy > (int)s_touch.max_dy) s_touch.max_dy = (uint16_t)dy;
+    } else if (s_touch.up) {
+        int32_t elapsed_ticks = (int32_t)(now - s_touch.down_tick);
+        if (elapsed_ticks < 0) elapsed_ticks = 0;
+        s_touch.duration_ms = (uint32_t)(elapsed_ticks * portTICK_PERIOD_MS);
+        bool moved = s_touch.max_dx > TOUCH_TAP_SLOP_PX ||
+                     s_touch.max_dy > TOUCH_TAP_SLOP_PX;
+        if (moved) {
+            s_touch.gesture = TOUCH_GESTURE_SWIPE;
+        } else if (s_touch.duration_ms <= TOUCH_TAP_MAX_MS) {
+            s_touch.gesture = TOUCH_GESTURE_TAP;
+        } else {
+            s_touch.gesture = TOUCH_GESTURE_NONE;
+        }
     }
     s_touch_last = pressed;
     return tap;

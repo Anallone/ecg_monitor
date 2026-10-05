@@ -20,7 +20,7 @@
 #define DEMO_BAR_W    6
 #define DEMO_BAR_Y    MENU_TOP
 #define DEMO_BAR_H    (DEMO_ROWS * ROW_H - 6)
-#define DEMO_DRAG_SLOP    10            /* 列表带内位移超过此值算滑动（滑动不触发选中） */
+#define DEMO_DRAG_SLOP    TOUCH_TAP_SLOP_PX
 #define DEMO_BTN_MOVE_TOL 20            /* 返回/内置按钮的点击位移容忍（按钮比行高大，容错放宽） */
 #define DEMO_BACK_X   12
 #define DEMO_BACK_Y   262
@@ -162,6 +162,8 @@ demo_act_t demo_touch(int* pick) {
         int      dy     = (int)touch_state()->y - (int)touch_state()->y0;
         bool     armed  = s_demo_armed;
         bool     moved  = s_demo_drag;
+        bool     swiped = touch_state()->gesture == TOUCH_GESTURE_SWIPE;
+        bool     tapped = touch_state()->gesture == TOUCH_GESTURE_TAP;
         uint16_t px     = touch_state()->x0, py = touch_state()->y0;   /* 命中判定用按下点 */
         s_demo_armed  = false;
         s_demo_drag   = false;
@@ -170,17 +172,17 @@ demo_act_t demo_touch(int* pick) {
         if (!armed) return DEMO_ACT_NONE;   /* 上一页按下的手势不归本页 */
 
         /* 返回键：不在滚动区内，位移容忍放宽一些，按得稍偏也算点中 */
-        if (abs(dy) <= DEMO_BTN_MOVE_TOL &&
+        if (!swiped && abs(dy) <= DEMO_BTN_MOVE_TOL &&
             ui_hit(px, py, DEMO_BACK_X, DEMO_BACK_Y, DEMO_BACK_W, DEMO_BACK_H)) {
             return DEMO_ACT_BACK;
         }
         if (player_count() == 0) {
-            if (abs(dy) <= DEMO_BTN_MOVE_TOL &&
+            if (!swiped && abs(dy) <= DEMO_BTN_MOVE_TOL &&
                 ui_hit(px, py, DEMO_BUILTIN_X, DEMO_BUILTIN_Y, DEMO_BUILTIN_W, DEMO_BUILTIN_H)) {
                 *pick = PLAYER_BUILTIN;
                 return DEMO_ACT_PLAY;
             }
-        } else if (!moved && abs(dy) <= DEMO_DRAG_SLOP) {
+        } else if (tapped && !moved && abs(dy) <= DEMO_DRAG_SLOP) {
             /* 没滑动 = 点击选中。行位置与 draw_demo_list 用同一套布局（含首行滚出的像素） */
             const int off   = s_demo_px % ROW_H;
             const int first = s_demo_px / ROW_H;
