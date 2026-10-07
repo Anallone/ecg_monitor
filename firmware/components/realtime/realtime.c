@@ -19,6 +19,7 @@
 #include "esp_log.h"
 
 static const char* TAG = "RT";
+static const char* const k_class_symbols[5] = {"N", "S", "V", "F", "Q"};
 
 /* 因果移动平均窗：0.15s @360Hz */
 #define RT_MA_WIN 54
@@ -299,6 +300,7 @@ static bool classify_beat(rt_engine_t* e, int idx) {
     }
     e->beats[idx].cls = (int8_t)best;
     e->cls_count[best]++;
+    ESP_LOGI(TAG, "beat %d -> %s (R=%d)", idx, k_class_symbols[best], r);
     return true;
 }
 
