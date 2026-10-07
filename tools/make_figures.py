@@ -6,22 +6,38 @@
 
 生成：
     图1  系统总体框图
-    图2  训练收敛曲线（来自 models/res_se_cnn_metrics.json 的真实 history）
-    图3  跨患者测试集混淆矩阵
+    图2  训练收敛曲线（来自 models/res_se_cnn_rr4_metrics.json 的真实 history，报告图3）
+    图3  跨患者测试集混淆矩阵（报告图9）
     图4  GUI 实时监测界面截图（PySide6 离屏渲染，驱动真实 StreamingEngine）
-    图5  端侧固件状态机与页面流转
-    图6  因果流式处理时序
+    图5  端侧固件状态机与页面流转（报告图8）
+    图6  因果流式处理时序（报告图5）
+
+排版约束（本轮重做重点）
+  - 字号唯一：图内所有文字（标题 / 坐标轴标签 / 刻度 / 图例 / 方框文字 / 注释）
+    一律 10.5 pt（= 五号），脚本末尾会统计并校验「非 10.5 pt 文字」。
+  - 字体：西文与数字 Times New Roman（C:/Windows/Fonts/times.ttf），
+    中文宋体（C:/Windows/Fonts/simsun.ttc）。用 addfont 注册后，
+    rcParams["font.serif"] = ["Times New Roman", "SimSun"]、rcParams["font.family"] = "serif"
+    （matplotlib 里 "Times New Roman"/"SimSun" 这类具体字体名不能直接写进 font.family，
+     写进去会被判为未知族名并回退到 DejaVu Sans；因此写进 serif 族列表、
+     由 serif 族驱动 "Times New Roman" 在前、"SimSun" 兜底中文）。
+    数学文本走 mathtext custom，rm / it / bf 全部指向 Times New Roman。
+  - 画布物理尺寸 = 文档显示尺寸：figsize=(宽cm/2.54, 高cm/2.54)，dpi=目标像素宽/宽(inch)，
+    这样 10.5 pt 落到文档里就是真正的五号；保存后再用 PIL 精确校正到目标像素。
+  - 内容占满画布：所有坐标都按「物理厘米 → 数据坐标」换算后显式书写，
+    文字宽度用渲染器实测（不靠估算），方框尺寸由实测文字包围盒反推。
 
 实现要点（因为生成环境无法目视预览，全部靠几何量测保证）：
   - 框图文字先绘制、量出实际包围盒，再按包围盒反推方框尺寸 —— 文字不会超出边框；
   - 箭头只走正交走廊，并逐段做「线段—矩形相交」校验 —— 连线不会横跨方框；
-  - 图2 图例外置于坐标区上方，并显式设定四周边距 —— 不与曲线重叠、内容居中；
-  - 图4 显式加载系统中文字体，并做「方框字」自检（逐字位图比对）。
+  - 标题 / 副标题 / 页脚等自由文字逐一对「方框 + 其它文字」做重叠校验；
+  - 图内文字逐字做「方框字」自检（与私用区无字形字符位图比对）。
 """
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -37,61 +53,126 @@ import numpy as np
 from matplotlib import font_manager
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
 
-CJK_FONT_CANDIDATES = ["C:/Windows/Fonts/msyh.ttc", "C:/Windows/Fonts/simhei.ttf",
-                       "C:/Windows/Fonts/simsun.ttc"]
-for _f in CJK_FONT_CANDIDATES:
-    if Path(_f).exists():
-        font_manager.fontManager.addfont(_f)
-        matplotlib.rcParams["font.family"] = font_manager.FontProperties(fname=_f).get_name()
-        CJK_FONT_FILE = _f
-        break
-matplotlib.rcParams["axes.unicode_minus"] = False
+# ---------------------------------------------------------------------------
+# 字体：Times New Roman（西文/数字）+ SimSun 宋体（中文）
+# ---------------------------------------------------------------------------
+TIMES_TTF = "C:/Windows/Fonts/times.ttf"
+SIMSUN_TTC = "C:/Windows/Fonts/simsun.ttc"
+# 兜底候选（times.ttf 缺失时才使用）
+TIMES_FALLBACKS = ["C:/Windows/Fonts/timesbd.ttf", "C:/Windows/Fonts/georgia.ttf",
+                   "C:/Windows/Fonts/constan.ttf"]
+CJK_FONT_CANDIDATES = ["C:/Windows/Fonts/simsun.ttc", "C:/Windows/Fonts/simhei.ttf",
+                       "C:/Windows/Fonts/msyh.ttc"]
+
+FS = 10.5           # 全图唯一字号：五号（10.5 pt）
+lw_box = 1.1        # 方框描边
+lw_line = 1.1       # 连线
+# 报告配色（浅色底、蓝灰主色、砖红仅用于报警/强调）
+C_BLUE, C_GREEN, C_RED, C_PURPLE, C_GRAY = "#2c6fbb", "#27803f", "#c0392b", "#7d3cbb", "#8a9099"
+C_TEXT, C_MUTED = "#333333", "#555555"
+FC_BLUE, FC_GREEN, FC_RED, FC_GRAY, FC_PURPLE = "#eaf2fb", "#eef7ee", "#fdeeee", "#f2f2f2", "#f4eefb"
+
+
+def _squash(s: str) -> str:
+    """压缩多余空白（连续空格合并、去掉“ ”两侧空格），文字更紧凑。"""
+    s = (s.replace("\u3000", " ").replace("\u2009", " ").replace("\u202f", " ")
+         .replace("\xa0", " "))
+    s = re.sub(r"[ \t]+", " ", s)
+    s = re.sub(r"\s*/\s*", " / ", s)
+    return s.strip()
+
+PROBLEMS: list[str] = []
+FONT_SIZES: list[tuple[str, float]] = []
+
+
+def _register_fonts() -> tuple[str, str]:
+    """注册 Times New Roman 与宋体，返回 (西文字体文件, 中文字体文件)。"""
+    latin = TIMES_TTF if Path(TIMES_TTF).exists() else next(
+        (f for f in TIMES_FALLBACKS if Path(f).exists()), None)
+    if latin is None:
+        raise SystemExit("找不到 Times 系列西文字体文件")
+    cjk = next((f for f in CJK_FONT_CANDIDATES if Path(f).exists()), None)
+    if cjk is None:
+        raise SystemExit("找不到中文字体文件（simsun.ttc / simhei.ttf / msyh.ttc）")
+    latin_name = font_manager.FontProperties(fname=latin).get_name()
+    cjk_name = font_manager.FontProperties(fname=cjk).get_name()
+    font_manager.fontManager.addfont(latin)
+    font_manager.fontManager.addfont(cjk)
+
+    # matplotlib 的 font.family 只认 generic 族名 + 已安装族名；具体族名写在族列表里，
+    # 由 serif 族解析：先 Times New Roman（西文/数字），缺字形的中文回退 SimSun。
+    # 注意：matplotlib 只有在 font.family 里写「具体族名列表」时才会做缺字形回退；
+    # 写成 font.family=["serif"] + font.serif=[...] 时中文不会回退，会渲染成方框（已实测）。
+    matplotlib.rcParams["font.family"] = [latin_name, cjk_name, "DejaVu Serif"]
+    matplotlib.rcParams["font.serif"] = [latin_name, cjk_name, "DejaVu Serif"]
+    matplotlib.rcParams["font.sans-serif"] = [latin_name, cjk_name, "DejaVu Sans"]
+    matplotlib.rcParams["axes.unicode_minus"] = False
+    matplotlib.rcParams["font.size"] = FS
+    matplotlib.rcParams["mathtext.fontset"] = "custom"
+    matplotlib.rcParams["mathtext.rm"] = latin_name
+    matplotlib.rcParams["mathtext.it"] = f"{latin_name}:italic"
+    matplotlib.rcParams["mathtext.bf"] = f"{latin_name}:bold"
+
+    # 实测校验：西文解析到 Times，中文解析到宋体（避免静默回退 DejaVu）
+    probe_latin = font_manager.findfont(font_manager.FontProperties(family=[latin_name]))
+    probe_cjk = font_manager.findfont(font_manager.FontProperties(family=[cjk_name]))
+    if Path(probe_latin).name.lower() != Path(latin).name.lower():
+        PROBLEMS.append(f"字体: 西文未解析到 {latin}，而是 {probe_latin}")
+    if Path(probe_cjk).name.lower() != Path(cjk).name.lower():
+        PROBLEMS.append(f"字体: 中文未解析到 {cjk}，而是 {probe_cjk}")
+    print(f"字体: 西文={latin_name} ({latin}) / 中文={cjk_name} ({cjk}) / 字号={FS} pt")
+    return latin, cjk
+
+
+LATIN_FONT, CJK_FONT = _register_fonts()
 
 # 报告图2/图3 采用主线模型的实测指标。必须与 docs/tools/fill_report.py 的 MAIN_MODEL
 # 保持一致，否则正文数字与插图会取自不同的模型。
 MODEL_NAME = "res_se_cnn_rr4"
 METRICS = json.loads((ROOT / "models" / f"{MODEL_NAME}_metrics.json").read_text(encoding="utf-8"))
 CLASSES = ["N", "S", "V", "F", "Q"]
-
-PROBLEMS: list[str] = []
+N_PARAMS = int(METRICS["n_params"])                    # 37,445
+TEST_ACC = float(METRICS["test_acc"]) * 100            # 94.30 %
+MACRO_F1 = float(METRICS["test_macro_f1"]) * 100       # 43.31 %
+DEPLOY_KB = round(N_PARAMS * 4 * 0.2652 / 1024, 2)     # 38.79 KB（与报告表 12 一致）
+INT8_BYTES = 36127 + 3592                              # int8 权重 + float 偏置 = 39,719 B
 
 
 # ---------------------------------------------------------------------------
-# 通用：按文字实测尺寸画方框；正交连线并校验不穿框
+# 通用工具
 # ---------------------------------------------------------------------------
-def measure_text(ax, fig, cx, cy, lines, fontsize, linespacing=1.45):
-    """返回文字在数据坐标下的 (x0, y0, w, h)。"""
-    txt = ax.text(cx, cy, "\n".join(lines), ha="center", va="center",
-                  fontsize=fontsize, linespacing=linespacing, zorder=5)
+def text_size(ax, fig, lines, fontsize=FS, linespacing=1.35, weight="normal"):
+    """实测文字在数据坐标下的宽度、高度（不留下残留文字）。"""
+    if isinstance(lines, (list, tuple)):
+        s = "\n".join(_squash(x) for x in lines)
+    else:
+        s = _squash(lines)
+    t = ax.text(0, 0, s, ha="center", va="center", fontsize=fontsize,
+                linespacing=linespacing, fontweight=weight, zorder=5)
     fig.canvas.draw()
-    bb = txt.get_window_extent(renderer=fig.canvas.get_renderer())
-    bb = bb.transformed(ax.transData.inverted())
-    return txt, (bb.x0, bb.y0, bb.width, bb.height)
+    bb = t.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(
+        ax.transData.inverted())
+    t.remove()
+    return bb.width, bb.height
 
 
-def probe_width(ax, fig, lines, fontsize, linespacing=1.45):
-    """临时绘制再删除，用于量出文字宽度（不留残留文字）。"""
-    txt, (_, _, w, _) = measure_text(ax, fig, 0, 0, lines, fontsize, linespacing)
-    txt.remove()
-    return w
-
-
-def draw_box(ax, fig, cx, cy, lines, fontsize=9.5, pad_x=1.2, pad_y=1.0,
-             fc="#eaf2fb", ec="#2c6fbb", bold=False):
-    """画一个恰好包住文字（含内边距）的圆角框，返回 (x0, y0, w, h)。"""
-    txt, (tx, ty, tw, th) = measure_text(ax, fig, cx, cy, lines, fontsize)
-    if bold and txt.get_weight() != "bold":
-        txt.set_fontweight("bold")
-        fig.canvas.draw()
-        bb = txt.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(
-            ax.transData.inverted())
-        tx, ty, tw, th = bb.x0, bb.y0, bb.width, bb.height
-    x0, y0 = tx - pad_x, ty - pad_y
-    w, h = tw + 2 * pad_x, th + 2 * pad_y
-    ax.add_patch(FancyBboxPatch((x0, y0), w, h,
+def draw_box(ax, fig, cx, cy, lines, fc, ec, pad_x=2.2, pad_y=1.0, linespacing=1.35):
+    """画一个恰好包住实测文字的圆角框，返回 (x0, y0, w, h)。"""
+    lines = [_squash(x) for x in lines]
+    w, h = text_size(ax, fig, lines, linespacing=linespacing)
+    x0, y0 = cx - w / 2 - pad_x, cy - h / 2 - pad_y
+    bw, bh = w + 2 * pad_x, h + 2 * pad_y
+    ax.add_patch(FancyBboxPatch((x0, y0), bw, bh,
                                 boxstyle="round,pad=0,rounding_size=1.0",
-                                linewidth=1.1, facecolor=fc, edgecolor=ec, zorder=3))
-    return (x0, y0, w, h)
+                                linewidth=lw_box, facecolor=fc, edgecolor=ec, zorder=3))
+    t = ax.text(cx, cy, "\n".join(lines), ha="center", va="center", fontsize=FS,
+                linespacing=linespacing, color=C_TEXT, zorder=5)
+    note_size(t)
+    return (x0, y0, bw, bh)
+
+
+def note_size(txt) -> None:
+    FONT_SIZES.append((txt.get_text()[:24].replace("\n", "⏎"), float(txt.get_fontsize())))
 
 
 def seg_hits_rect(p1, p2, rect, shrink=0.6):
@@ -101,7 +182,6 @@ def seg_hits_rect(p1, p2, rect, shrink=0.6):
     if x1 <= x0 or y1 <= y0:
         return False
     (ax_, ay), (bx, by) = p1, p2
-    # Liang-Barsky
     dx, dy = bx - ax_, by - ay
     t0, t1 = 0.0, 1.0
     for p, q in ((-dx, ax_ - x0), (dx, x1 - ax_), (-dy, ay - y0), (dy, y1 - ay)):
@@ -123,35 +203,13 @@ def seg_hits_rect(p1, p2, rect, shrink=0.6):
     return True
 
 
-def ortho_arrow(ax, p_from, p_to, boxes, color="#444", label="", label_offset=(0, 1.0),
-                label_fs=8.5, mid=None):
-    """从 p_from 经 mid（缺省取中点拐一次）到 p_to 的正交连线，校验不穿框。
-
-    boxes: [(name, rect), ...]，允许穿过起点/终点所在框。
-    """
-    if mid is None:
-        mid = (p_to[0], p_from[1])
-    pts = [p_from, mid, p_to]
-    for a, b in zip(pts[:-1], pts[1:]):
-        if a == b:
-            continue
-        for name, rect in boxes:
-            if seg_hits_rect(a, b, rect):
-                PROBLEMS.append(f"连线 {a}->{b} 穿过方框 {name}")
-    for a, b in zip(pts[:-1], pts[1:]):
-        ax.plot([a[0], b[0]], [a[1], b[1]], color=color, lw=1.1, zorder=4,
-                solid_capstyle="butt")
-    ax.add_patch(FancyArrowPatch(pts[-2], pts[-1], arrowstyle="-|>", mutation_scale=11,
-                                 linewidth=1.1, color=color, zorder=4))
-    if label:
-        lx = (pts[0][0] + pts[1][0]) / 2 + label_offset[0]
-        ly = (pts[0][1] + pts[1][1]) / 2 + label_offset[1]
-        ax.text(lx, ly, label, ha="center", va="bottom", fontsize=label_fs,
-                color="#333", zorder=6)
+def rects_overlap(a, b, tol=0.0):
+    return not (a[0] + a[2] <= b[0] + tol or b[0] + b[2] <= a[0] + tol or
+                a[1] + a[3] <= b[1] + tol or b[1] + b[3] <= a[1] + tol)
 
 
 def check_text_inside_figure(fig, name):
-    """校验所有文字都在画布内（防止被裁切）。"""
+    """校验所有文字都在画布内（防止被裁切），并登记字号。"""
     fig.canvas.draw()
     r = fig.canvas.get_renderer()
     fb = fig.bbox
@@ -159,6 +217,7 @@ def check_text_inside_figure(fig, name):
         s = t.get_text()
         if not s.strip():
             continue
+        note_size(t)
         try:
             bb = t.get_window_extent(renderer=r)
         except Exception:
@@ -167,190 +226,324 @@ def check_text_inside_figure(fig, name):
             PROBLEMS.append(f"{name}: 文字被裁切 -> {s[:24]!r}")
 
 
-# ---------------------------------------------------------------------------
-# 图1 系统总体框图
-# ---------------------------------------------------------------------------
-def fig_block_diagram():
-    fig, ax = plt.subplots(figsize=(9.6, 4.8), dpi=300)
-    ax.set_xlim(0, 150); ax.set_ylim(0, 68); ax.axis("off")
-    boxes = []
+def check_boxes_inside(ax, name, boxes, xlim, ylim):
+    """校验方框整体（含描边）在数据坐标范围内。"""
+    for nm, (x0, y0, w, h) in boxes:
+        if x0 < xlim[0] or y0 < ylim[0] or x0 + w > xlim[1] or y0 + h > ylim[1]:
+            PROBLEMS.append(f"{name}: 方框 {nm} 超出画布 ({x0:.2f},{y0:.2f},{w:.2f},{h:.2f})")
 
-    def add(name, rect):
-        boxes.append((name, rect))
-        return rect
 
-    # 第一行：信号链（按实测宽度顺序排布，绝不重叠）
-    row1 = [
-        ("源", "ECG 信号源", "MIT-BIH / 端侧采集"),
-        ("预处理", "预处理", "0.5–45 Hz 带通", "+50 Hz 陷波"),
-        ("R峰检测", "R 峰检测", "Pan-Tompkins", "（因果流式）"),
-        ("分割", "心拍分割", "187 点窗口", "逐拍归一化"),
-        ("CNN", "轻量 1D CNN", "深度可分离卷积", "int8 · 7.21 KB"),
-    ]
-    gap = 6.0
-    # 先量宽度
-    widths = []
-    for name, *lines in row1:
-        widths.append(probe_width(ax, fig, lines, 9.5) + 2 * 1.2)   # 含 pad_x
-    total = sum(widths) + gap * (len(row1) - 1)
-    x = (150 - total) / 2
-    row1_rects = []
-    for (name, *lines), w in zip(row1, widths):
-        cx = x + w / 2
-        rect = draw_box(ax, fig, cx, 52, lines, 9.5)
-        add(name, rect)
-        row1_rects.append(rect)
-        x += w + gap
+class FreeText:
+    """收集自由文字，校验：不与方框重叠、彼此不重叠、不被连线穿过。"""
 
-    # 第一行内部箭头（同一水平线，必然不穿框）
-    for a, b in zip(row1_rects[:-1], row1_rects[1:]):
-        ax.add_patch(FancyArrowPatch((a[0] + a[2], a[1] + a[3] / 2),
-                                     (b[0], b[1] + b[3] / 2),
-                                     arrowstyle="-|>", mutation_scale=11,
-                                     linewidth=1.1, color="#444", zorder=4))
+    def __init__(self, ax, fig, name):
+        self.ax, self.fig, self.name = ax, fig, name
+        self.items = []
 
-    # 第二行：下游（置于第一行下方，用正交总线连接）
-    row2 = [
-        ("分类结果", "AAMI 五类", "N / S / V / F / Q"),
-        ("心率报警", "心率与报警", "R-R 间期，>100 / <50 bpm"),
-        ("显示/端侧", "GUI 与端侧显示", "波形 + 标注 + 触摸确认"),
-    ]
-    widths2 = []
-    for name, *lines in row2:
-        widths2.append(probe_width(ax, fig, lines, 9.5) + 2 * 1.2)
-    gap2 = 8.0
-    total2 = sum(widths2) + gap2 * (len(row2) - 1)
-    x = (150 - total2) / 2
-    row2_rects = []
-    for (name, *lines), w in zip(row2, widths2):
-        cx = x + w / 2
-        rect = draw_box(ax, fig, cx, 18, lines, 9.5, fc="#eef7ee", ec="#27803f")
-        add(name, rect)
-        row2_rects.append(rect)
-        x += w + gap2
+    def add(self, txt):
+        self.fig.canvas.draw()
+        bb = txt.get_window_extent(renderer=self.fig.canvas.get_renderer()).transformed(
+            self.ax.transData.inverted())
+        self.items.append((txt.get_text()[:20], (bb.x0, bb.y0, bb.width, bb.height)))
+        note_size(txt)
+        return txt
 
-    # 从第一行末端向下到总线，再由总线分发到第二行各项
-    src = row1_rects[-1]
-    src_x = src[0] + src[2] / 2
-    bus_y = 34.0
-    ax.plot([src_x, src_x], [src[1], bus_y], color="#444", lw=1.1, zorder=2)
-    bus_x0 = min(r[0] + r[2] / 2 for r in row2_rects + [src])
-    bus_x1 = max(r[0] + r[2] / 2 for r in row2_rects + [src])
-    ax.plot([bus_x0, bus_x1], [bus_y, bus_y], color="#444", lw=1.1, zorder=2)
-    for r in row2_rects:
-        tx = r[0] + r[2] / 2
-        ax.plot([tx, tx], [bus_y, r[1] + r[3]], color="#444", lw=1.1, zorder=2)
-        ax.add_patch(FancyArrowPatch((tx, bus_y), (tx, r[1] + r[3]),
-                                     arrowstyle="-|>", mutation_scale=11,
-                                     linewidth=1.1, color="#444", zorder=4))
-    # 干线/总线/分发竖线的穿框校验
-    for nm, rect in boxes:
-        if rect is not src and seg_hits_rect((src_x, src[1]), (src_x, bus_y), rect):
-            PROBLEMS.append(f"图1: 竖直干线穿过 {nm}")
-        if seg_hits_rect((bus_x0, bus_y), (bus_x1, bus_y), rect):
-            PROBLEMS.append(f"图1: 水平总线穿过 {nm}")
-    for r in row2_rects:
-        tx = r[0] + r[2] / 2
-        for nm2, rr in boxes:
-            if rr is r:
-                continue
-            if seg_hits_rect((tx, bus_y), (tx, r[1] + r[3]), rr):
-                PROBLEMS.append(f"图1: 分发竖线穿过 {nm2}")
+    def text(self, x, y, s, **kw):
+        """登记自由文字（自动压缩空白）。"""
+        kw.setdefault("fontsize", FS)
+        return self.add(self.ax.text(x, y, _squash(s), **kw))
 
-    txt = ax.text(75, 4.5, "离线训练 → 量化压缩 → 模拟实时推理 → GUI 可视化 → 端侧部署",
-                  ha="center", fontsize=9.5, color="#555", zorder=5)
-    ax.text(75, 62.5, "系统总体技术路线", ha="center", fontsize=11, color="#333", zorder=5)
-    fig.subplots_adjust(left=0.01, right=0.99, top=0.97, bottom=0.03)
-    check_text_inside_figure(fig, "图1")
-    fig.savefig(OUT / "fig1_system.png")
+    def check(self, boxes=(), segs=()):
+        for label, r in self.items:
+            for nm, box in boxes:
+                if rects_overlap(r, box, tol=-0.3):
+                    PROBLEMS.append(f"{self.name}: 文字「{label}」与方框 {nm} 重叠")
+            for a, b in segs:
+                if seg_hits_rect(a, b, r, shrink=0.05):
+                    PROBLEMS.append(f"{self.name}: 文字「{label}」被连线 {a}->{b} 穿过")
+        for i in range(len(self.items)):
+            for j in range(i + 1, len(self.items)):
+                li, ri = self.items[i]
+                lj, rj = self.items[j]
+                if rects_overlap(ri, rj, tol=-0.3):
+                    PROBLEMS.append(f"{self.name}: 文字「{li}」与「{lj}」互相重叠")
+
+
+def check_no_overlap(name, boxes):
+    """方框之间不得重叠。"""
+    for i in range(len(boxes)):
+        for j in range(i + 1, len(boxes)):
+            ni, ri = boxes[i]
+            nj, rj = boxes[j]
+            if rects_overlap(ri, rj, tol=-0.2):
+                PROBLEMS.append(f"{name}: 方框 {ni} 与 {nj} 重叠")
+
+
+def save_exact(fig, path: Path, px_w: int, px_h: int):
+    """保存为精确像素尺寸的 PNG（必要时用 PIL LANCZOS 校正）。"""
+    tmp = path.with_name("_" + path.name)
+    fig.savefig(tmp)
     plt.close(fig)
-    print("图1 ->", OUT / "fig1_system.png")
+    from PIL import Image
+    im = Image.open(tmp)
+    if im.size != (px_w, px_h):
+        im = im.convert("RGB").resize((px_w, px_h), Image.LANCZOS)
+    else:
+        im = im.convert("RGB")
+    im.save(path)
+    tmp.unlink(missing_ok=True)
+    print(f"  -> {path.name}  {im.size[0]}x{im.size[1]} px")
+
+
+def paper_axes(fig, w_cm, h_cm, left, right, bottom, top):
+    """按物理厘米新建坐标区：left/right/bottom/top 单位 cm（原点在左下）。"""
+    ax = fig.add_axes((left / w_cm, bottom / h_cm,
+                       1 - (left + right) / w_cm, 1 - (bottom + top) / h_cm))
+    return ax
+
+
+def font_check_boxes(fig, name, texts):
+    """逐字「方框字」自检：与私用区字符（必定无字形）的位图比对。
+
+    同时把每个字渲染到较小画布，字形缺失时 matplotlib 会画 .notdef 方框，
+    其位图与私用区字符完全一致。
+    """
+    from matplotlib.textpath import TextPath
+    bad = []
+    seen = set()
+    for s in texts:
+        for ch in s:
+            if ch in " \n\t" or ch in seen:
+                continue
+            seen.add(ch)
+            try:
+                tp = TextPath((0, 0), ch, size=30,
+                              prop=font_manager.FontProperties(
+                                  family=matplotlib.rcParams["font.serif"]))
+                if len(tp.vertices) <= 5:      # 只剩 .notdef 的空框
+                    bad.append(f"{ch!r}(U+{ord(ch):04X})")
+            except Exception:
+                bad.append(f"{ch!r}(U+{ord(ch):04X})")
+    if bad:
+        PROBLEMS.append(f"{name}: 下列字符缺字形（会显示为方框）-> {sorted(set(bad))}")
+    return sorted(set(bad))
 
 
 # ---------------------------------------------------------------------------
-# 图2 训练收敛曲线
+# 图1 系统总体框图（15.00 cm × 7.50 cm → 2880 × 1440 px）
 # ---------------------------------------------------------------------------
+FIG1_W_CM, FIG1_H_CM, FIG1_PX = 15.00, 7.50, (2880, 1440)
+
+
+def _layout_row(ax, fig, put, items, y, x_lo, x_hi, min_gap, tag):
+    """把 items 在一行内按实测宽度均布；返回各框矩形。"""
+    ws = [text_size(ax, fig, ln)[0] + 2.0 for _, ln in items]
+    n = len(items)
+    gap = (x_hi - x_lo - sum(ws)) / (n - 1)
+    if gap < min_gap:
+        PROBLEMS.append(f"图1: {tag} 行间距不足（{gap:.2f} < {min_gap}）")
+    rects, cx = [], x_lo
+    for (nm, ln), w in zip(items, ws):
+        rects.append(put(cx + w / 2, y, ln, FC_BLUE, C_BLUE, nm))
+        cx += w + gap
+    return rects
+
+
+def fig_block_diagram():
+    fig = plt.figure(figsize=(FIG1_W_CM / 2.54, FIG1_H_CM / 2.54),
+                     dpi=FIG1_PX[0] / (FIG1_W_CM / 2.54))
+    ax = fig.add_axes((0, 0, 1, 1))
+    X, Y = FIG1_W_CM * 10, FIG1_H_CM * 10              # 数据坐标 = 0.1 cm
+    ax.set_xlim(0, X); ax.set_ylim(0, Y); ax.axis("off")
+    boxes = []
+    lc = FreeText(ax, fig, "图1")
+    segs = []
+
+    def put(cx, cy, lines, fc, ec, name, pad_x=1.0, pad_y=0.8):
+        r = draw_box(ax, fig, cx, cy, lines, fc, ec, pad_x=pad_x, pad_y=pad_y)
+        boxes.append((name, r))
+        return r
+
+    # 第一行：信号链五段（主色蓝）；第二行：下游三项（辅色绿）
+    row1 = [("源", ["ECG 信号源", "MIT-BIH / 端侧采集"]),
+            ("预处理", ["0.5–45 Hz 带通", "+50 Hz 陷波"]),
+            ("R峰检测", ["Pan-Tompkins", "因果流式检测"]),
+            ("分割", ["心拍分割 187 点", "逐拍归一化"]),
+            ("CNN", ["轻量 1D CNN", "int8 38.79 KB"])]
+    row2 = [("分类结果", ["AAMI 五类", "N / S / V / F / Q"]),
+            ("心率报警", ["R-R 间期", ">100 / <50 bpm"]),
+            ("显示/端侧", ["GUI + 端侧显示", "波形 / 标注 / 触摸"])]
+    # 左列五段纵向信号链，右列三个下游框（两列错开，横线走 y=48/26/4 三条走廊）
+    LX, LW = 2.0, 56.0
+    RX, RW = 90.0, 51.0
+    r1, ys1 = [], [66.0, 54.0, 40.0, 26.0, 12.0]
+    for (nm, ln), yy in zip(row1, ys1):
+        w = text_size(ax, fig, ln)[0] + 2.0
+        if w > LW:
+            PROBLEMS.append(f"图1: 方框 {nm} 宽 {w:.2f} 超出左列宽 {LW}")
+        r1.append(put(LX + LW / 2, yy, ln, FC_BLUE, C_BLUE, nm))
+    r2 = []
+    for (nm, ln), yy in zip(row2, [64.0, 42.0, 20.0]):
+        w = text_size(ax, fig, ln)[0] + 2.0
+        if w > RW:
+            PROBLEMS.append(f"图1: 方框 {nm} 宽 {w:.2f} 超出右列宽 {RW}")
+        r2.append(put(RX + RW / 2, yy, ln, FC_GREEN, C_GREEN, nm))
+
+    # 左列内部纵向推进
+    for a, b in zip(r1[:-1], r1[1:]):
+        seg = ((a[0] + a[2] / 2, a[1]), (b[0] + b[2] / 2, b[1] + b[3]))
+        segs.append(seg)
+        ax.add_patch(FancyArrowPatch(*seg, arrowstyle="-|>", mutation_scale=11,
+                                     linewidth=lw_line, color="#444", zorder=4))
+    # 右列内部纵向推进
+    for a, b in zip(r2[:-1], r2[1:]):
+        seg = ((a[0] + a[2] / 2, a[1]), (b[0] + b[2] / 2, b[1] + b[3]))
+        segs.append(seg)
+        ax.add_patch(FancyArrowPatch(*seg, arrowstyle="-|>", mutation_scale=11,
+                                     linewidth=lw_line, color="#444", zorder=4))
+
+    # 分发：左列首框（源）→ 竖直干线 → 三条横线 → 右列三个下游框
+    src = r1[0]
+    trunk_x = 78.0
+    src_y = src[1] + src[3] / 2
+    for nm, rect in boxes:
+        if seg_hits_rect((src[0] + src[2], src_y), (trunk_x, src_y), rect):
+            PROBLEMS.append(f"图1: 分发（源）横线穿过 {nm}")
+        if seg_hits_rect((trunk_x, src_y), (trunk_x, r2[-1][1] + r2[-1][3] / 2), rect):
+            PROBLEMS.append(f"图1: 分发竖直干线穿过 {nm}")
+    ax.plot([src[0] + src[2], trunk_x], [src_y, src_y], color="#444", lw=lw_line, zorder=2)
+    ax.plot([trunk_x, trunk_x], [src_y, r2[-1][1] + r2[-1][3] / 2],
+            color="#444", lw=lw_line, zorder=2)
+    segs.append(((src[0] + src[2], src_y), (trunk_x, src_y)))
+    for r in r2:
+        ty = r[1] + r[3] / 2
+        segs.append(((trunk_x, min(ty, src_y)), (trunk_x, ty)))
+        segs.append(((trunk_x, ty), (r[0], ty)))
+        ax.add_patch(FancyArrowPatch((trunk_x, ty), (r[0], ty), arrowstyle="-|>",
+                                     mutation_scale=11, linewidth=lw_line, color="#444",
+                                     zorder=4))
+        for nm, rect in boxes:
+            if rect is r or rect is src:
+                continue
+            if seg_hits_rect((trunk_x, ty), (r[0], ty), rect):
+                PROBLEMS.append(f"图1: 分发横线穿过 {nm}")
+    lc.text(6.0, Y - 3.4, "系统总体框图", ha="left", va="center", color=C_TEXT)
+    lc.text(X / 2, 2.8, "离线训练 → 量化压缩 → 实时推理 → GUI 可视化 → 端侧部署",
+            ha="center", va="center", color=C_MUTED)
+    check_no_overlap("图1", boxes)
+    check_boxes_inside(ax, "图1", boxes, (0, X), (0, Y))
+    lc.check(boxes=boxes, segs=segs)
+    check_text_inside_figure(fig, "图1")
+    font_check_boxes(fig, "图1", [t for _, ln in row1 + row2 for t in ln] +
+                     ["系统总体框图", "离线训练 → 量化压缩 → 实时推理 → GUI 可视化 → 端侧部署"])
+    save_exact(fig, OUT / "fig1_system.png", *FIG1_PX)
+    return boxes
+
+
+# ---------------------------------------------------------------------------
+# 图2 训练收敛曲线（13.50 cm × 8.03 cm → 2220 × 1320 px）
+# ---------------------------------------------------------------------------
+FIG2_W_CM, FIG2_H_CM, FIG2_PX = 13.50, 8.03, (2220, 1320)
+
+
 def fig_training_curves():
     h = METRICS["history"]
     ep = np.arange(1, len(h["train_loss"]) + 1)
-    fig, ax1 = plt.subplots(figsize=(7.4, 4.4), dpi=300)
+    loss = np.array(h["train_loss"]) * 100
+    acc = np.array(h["val_acc"]) * 100
 
-    ax1.plot(ep, h["train_loss"], color="#2c6fbb", marker="o", ms=3.4, lw=1.4, label="训练损失")
-    ax1.set_xlabel("训练轮次 (epoch)")
-    ax1.set_ylabel("训练损失", color="#2c6fbb")
-    ax1.tick_params(axis="y", labelcolor="#2c6fbb")
-    ax1.set_ylim(0.0, 1.18)
+    fig = plt.figure(figsize=(FIG2_W_CM / 2.54, FIG2_H_CM / 2.54),
+                     dpi=FIG2_PX[0] / (FIG2_W_CM / 2.54))
+    ax1 = paper_axes(fig, FIG2_W_CM, FIG2_H_CM, left=1.70, right=1.75, bottom=1.20, top=0.90)
+    l1, = ax1.plot(ep, loss, color=C_BLUE, marker="o", ms=3.6, lw=1.4, label="训练损失 (×100)")
+    ax1.set_xlabel("训练轮次 (epoch)", fontsize=FS)
+    ax1.set_ylabel("训练损失 (×100)", color=C_BLUE, fontsize=FS)
+    ax1.tick_params(axis="y", labelcolor=C_BLUE, labelsize=FS)
+    ax1.tick_params(axis="x", labelsize=FS)
+    ax1.set_ylim(1.4, 13.6)
+    ax1.set_yticks([2, 4, 6, 8, 10, 12])
+    ax1.set_xticks(np.arange(1, 16, 2))
+    ax1.set_xlim(-1.6, len(ep) + 1.0)
     ax1.grid(alpha=0.3, linestyle="--")
 
     ax2 = ax1.twinx()
-    ax2.plot(ep, [v * 100 for v in h["val_acc"]], color="#c0392b", marker="s", ms=3.4, lw=1.4,
-             label="验证准确率")
-    ax2.set_ylabel("验证准确率 (%)", color="#c0392b")
-    ax2.tick_params(axis="y", labelcolor="#c0392b")
-    ax2.set_ylim(88.5, 101.0)
+    l2, = ax2.plot(ep, acc, color=C_RED, marker="s", ms=3.6, lw=1.4, label="验证准确率")
+    ax2.set_ylabel("验证准确率 (%)", color=C_RED, fontsize=FS)
+    ax2.tick_params(axis="y", labelcolor=C_RED, labelsize=FS)
+    ax2.set_ylim(86.0, 98.0)
+    ax2.set_yticks([87, 89, 91, 93, 95, 97])
 
-    best_ep = int(np.argmax(h["val_acc"])) + 1
-    best = max(h["val_acc"]) * 100
-    ax2.axvline(best_ep, color="#999", ls=":", lw=1.1)
-    # 峰值用星标 + 短标签标出：不做跨曲线箭头，标签置于曲线以上的空白区
-    ax2.plot([best_ep], [best], marker="*", ms=13, color="#c0392b", zorder=6)
-    ann = ax2.text(best_ep + 0.6, 99.2, f"峰值 {best:.2f}%", fontsize=9, color="#c0392b",
+    best_i = int(np.argmax(acc))
+    best_ep, best = int(ep[best_i]), float(acc[best_i])
+    ax2.axvline(best_ep, color="#999", ls=":", lw=1.1, zorder=1)
+    ax2.plot([best_ep], [best], marker="*", ms=13, color=C_RED, zorder=6)
+    ann = ax2.text(best_ep + 0.35, best - 2.6, f"峰值 {best:.2f}%", fontsize=FS, color=C_RED,
                    ha="left", va="center", zorder=6)
-    # 标签必须落在坐标区内，且不与验证曲线相交
     fig.canvas.draw()
     ab = ann.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(
         ax2.transData.inverted())
     axb = ax2.get_window_extent().transformed(ax2.transData.inverted())
     if ab.x0 < axb.x0 or ab.x1 > axb.x1 or ab.y0 < axb.y0 or ab.y1 > axb.y1:
         PROBLEMS.append("图2: 峰值标签超出坐标区")
-    acc = np.array(h["val_acc"]) * 100
-    seg = acc[(ep >= ab.x0) & (ep <= ab.x1)]
-    if len(seg) and ab.y0 < seg.max() + 0.25:
+    # 标签置于峰值点右下方空白处：与验证曲线（x ≥ best_ep）不重叠
+    seg = acc[(ep >= ab.x0 - 0.25) & (ep <= ab.x1 + 0.25)]
+    if len(seg) and ab.y1 > seg.min() - 0.35:
         PROBLEMS.append("图2: 峰值标签与验证曲线重叠")
 
-    # 图例外置到坐标区上方，彻底避免与曲线重叠
-    lines = ax1.get_lines() + ax2.get_lines()
-    ax1.legend(lines, [l.get_label() for l in lines], loc="lower center",
-               bbox_to_anchor=(0.5, 1.005), ncol=2, frameon=False, fontsize=9.5)
-    ax1.set_xlim(0, len(ep) + 1)
-    # 对称边距 → 内容居中；右侧留够，避免右轴标签被裁
-    fig.subplots_adjust(left=0.105, right=0.895, top=0.855, bottom=0.135)
+    ax1.legend([l1, l2], [l1.get_label(), l2.get_label()], loc="lower center",
+               bbox_to_anchor=(0.5, 1.01), ncol=2, frameon=False, fontsize=FS,
+               handlelength=1.8, columnspacing=1.6, borderaxespad=0.0)
     check_text_inside_figure(fig, "图2")
-    fig.savefig(OUT / "fig2_training.png")
-    plt.close(fig)
-    print("图2 ->", OUT / "fig2_training.png")
+    txt = [f"峰值 {best:.2f}%", "训练轮次 (epoch)", "训练损失 (×100)", "验证准确率 (%)",
+           "训练损失 (×100)", "验证准确率"]
+    font_check_boxes(fig, "图2", txt)
+    save_exact(fig, OUT / "fig2_training.png", *FIG2_PX)
 
 
 # ---------------------------------------------------------------------------
-# 图3 混淆矩阵
+# 图3 混淆矩阵（12.00 cm × 10.67 cm → 1721 × 1530 px）
 # ---------------------------------------------------------------------------
+FIG3_W_CM, FIG3_H_CM, FIG3_PX = 12.00, 10.67, (1721, 1530)
+
+
 def fig_confusion():
     cm = np.array(METRICS["confusion_matrix"], dtype=float)
     row = cm.sum(axis=1, keepdims=True)
     norm = np.divide(cm, row, out=np.zeros_like(cm), where=row > 0)
 
-    fig, ax = plt.subplots(figsize=(6.2, 5.2), dpi=300)
+    fig = plt.figure(figsize=(FIG3_W_CM / 2.54, FIG3_H_CM / 2.54),
+                     dpi=FIG3_PX[0] / (FIG3_W_CM / 2.54))
+    W, H = FIG3_W_CM, FIG3_H_CM
+    ax = fig.add_axes((1.32 / W, 2.30 / H, 6.00 / W, 6.00 / H))
     im = ax.imshow(norm, cmap="Blues", vmin=0, vmax=1)
-    ax.set_xticks(range(5), CLASSES)
-    ax.set_yticks(range(5), CLASSES)
-    ax.set_xlabel("预测类别")
-    ax.set_ylabel("真实类别")
+    ax.set_xticks(range(5), CLASSES, fontsize=FS)
+    ax.set_yticks(range(5), CLASSES, fontsize=FS)
+    ax.tick_params(length=3)
+    ax.set_xlabel("预测类别", fontsize=FS)
+    ax.set_ylabel("真实类别", fontsize=FS)
     for i in range(5):
         for j in range(5):
             v = norm[i, j]
-            ax.text(j, i, f"{int(cm[i, j])}\n{v*100:.1f}%", ha="center", va="center",
-                    fontsize=8, color="white" if v > 0.55 else "#20304a", linespacing=1.3)
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.03, label="按行归一化比例")
-    ax.set_title(f"测试集准确率 {METRICS['test_acc']*100:.2f}%（DS2，跨患者）", fontsize=10.5)
-    fig.tight_layout()
+            ax.text(j, i, f"{int(cm[i, j])}\n{v * 100:.1f}%", ha="center", va="center",
+                    fontsize=FS, color="white" if v > 0.55 else "#20304a",
+                    linespacing=1.25, zorder=5)
+    ax.set_title(f"测试集准确率 {TEST_ACC:.2f}%（跨患者）", fontsize=FS, pad=6)
+    cax = fig.add_axes((8.15 / W, 2.30 / H, 0.50 / W, 6.00 / H))
+    cb = fig.colorbar(im, cax=cax)
+    cb.set_label("按行归一化比例", fontsize=FS)
+    cb.ax.tick_params(labelsize=FS)
+    lc = FreeText(ax, fig, "图3")
+    lc.text(2.5, -2.3, f"宏平均 F1 {MACRO_F1:.2f}% · 按行归一化（每行 100%）",
+            ha="center", va="center", color=C_MUTED)
+    font_check_boxes(fig, "图3", ["预测类别", "真实类别", "按行归一化比例",
+                                  f"测试集准确率 {TEST_ACC:.2f}%（跨患者）",
+                                  f"宏平均 F1 {MACRO_F1:.2f}% · 按行归一化（每行 100%）"] + CLASSES)
     check_text_inside_figure(fig, "图3")
-    fig.savefig(OUT / "fig3_confusion.png", bbox_inches="tight")
-    plt.close(fig)
-    print("图3 ->", OUT / "fig3_confusion.png")
+    save_exact(fig, OUT / "fig3_confusion.png", *FIG3_PX)
 
 
 # ---------------------------------------------------------------------------
-# 图4 GUI 离屏截图（含中文字体加载 + 方框字自检）
+# 图4 GUI 离屏截图（含中文字体加载 + 方框字自检）—— 本轮不改
 # ---------------------------------------------------------------------------
 def _install_cjk_font(app):
     """装中文字体并设置字形回退链，返回 (family, 字体文件)。
@@ -412,7 +605,7 @@ def _check_widget_glyphs(win, app):
               "⏳ 正在加载 MIT-BIH 记录 200 …",
               "播放结束：共 151 拍　⚠ 报警未确认", "报警 心动过速"]
     font = widgets[0].font() if widgets else app.font()
-    notdef = _glyph_sig(font, "")     # 私用区字符：必定无字形，作为「方框」基准
+    notdef = _glyph_sig(font, "\ue000")     # 私用区字符：必定无字形，作为「方框」基准
     seen, bad = set(), []
     for t in texts:
         for ch in t:
@@ -422,39 +615,6 @@ def _check_widget_glyphs(win, app):
             if _glyph_sig(font, ch) == notdef:
                 bad.append(f"{ch!r}(U+{ord(ch):04X})")
     return sorted(set(bad))
-
-
-class _LabelCheck:
-    """收集图内自由文字，校验：不与方框重叠、标签之间互不重叠。"""
-
-    def __init__(self, ax, fig, boxes, name):
-        self.ax, self.fig, self.boxes, self.name = ax, fig, boxes, name
-        self.items = []
-
-    def add(self, txt, label=""):
-        self.fig.canvas.draw()
-        bb = txt.get_window_extent(renderer=self.fig.canvas.get_renderer())
-        self.items.append((label or txt.get_text()[:12],
-                           bb.transformed(self.ax.transData.inverted())))
-        return txt
-
-    @staticmethod
-    def _overlap(a, b, tol=0.15):
-        return not (a[0] + a[2] <= b[0] + tol or b[0] + b[2] <= a[0] + tol or
-                    a[1] + a[3] <= b[1] + tol or b[1] + b[3] <= a[1] + tol)
-
-    def report(self):
-        for label, r in self.items:
-            for nm, box in self.boxes:
-                if self._overlap((r.x0, r.y0, r.width, r.height), box):
-                    PROBLEMS.append(f"{self.name}: 标签「{label}」与方框 {nm} 重叠")
-        for i in range(len(self.items)):
-            for j in range(i + 1, len(self.items)):
-                li, ri = self.items[i]
-                lj, rj = self.items[j]
-                if self._overlap((ri.x0, ri.y0, ri.width, ri.height),
-                                 (rj.x0, rj.y0, rj.width, rj.height)):
-                    PROBLEMS.append(f"{self.name}: 标签「{li}」与「{lj}」互相重叠")
 
 
 def fig_gui_screenshot(record: int = 200, ticks: int = 1400, size=(1000, 720)):
@@ -522,42 +682,29 @@ def fig_gui_screenshot(record: int = 200, ticks: int = 1400, size=(1000, 720)):
 
 
 # ---------------------------------------------------------------------------
-# 图5 端侧固件状态机（正交连线 + 不穿框校验）
+# 图5 端侧固件状态机与页面流转（15.00 cm × 8.30 cm → 2820 × 1560 px）
 # ---------------------------------------------------------------------------
+FIG5_W_CM, FIG5_H_CM, FIG5_PX = 15.00, 8.30, (2820, 1560)
+
+
 def fig_state_machine():
-    """端侧固件状态机：单列主干 + 右侧分支 + 右侧/下方回流走廊。
+    """横向主干五状态 + 下方回流走廊；正交连线逐段做不穿框校验。"""
+    fig = plt.figure(figsize=(FIG5_W_CM / 2.54, FIG5_H_CM / 2.54),
+                     dpi=FIG5_PX[0] / (FIG5_W_CM / 2.54))
+    ax = fig.add_axes((0, 0, 1, 1))
+    X, Y = FIG5_W_CM * 10, FIG5_H_CM * 10              # 数据坐标 = 0.1 cm
+    ax.set_xlim(0, X); ax.set_ylim(0, Y); ax.axis("off")
+    boxes, segs = [], []
+    lc = FreeText(ax, fig, "图5")
 
-    所有连线均为正交折线，并逐段校验不穿方框；所有标签校验不与方框、
-    不与其他标签重叠。
-    """
-    fig, ax = plt.subplots(figsize=(9.4, 5.2), dpi=300)
-    ax.set_xlim(0, 165); ax.set_ylim(0, 94); ax.axis("off")
-    boxes = []
-    lc = _LabelCheck(ax, fig, boxes, "图5")
-
-    def put(cx, cy, lines, fc, ec, name):
-        r = draw_box(ax, fig, cx, cy, lines, 9.3, pad_x=1.6, pad_y=1.2, fc=fc, ec=ec)
+    def put(cx, cy, lines, fc, ec, name, wmax=None, pad_x=1.2, pad_y=0.8):
+        """按实测文字宽度画框；wmax 给定时校验不超宽。"""
+        w = text_size(ax, fig, lines)[0] + 2 * pad_x
+        if wmax is not None and w > wmax + 0.01:
+            PROBLEMS.append(f"图5: 方框 {name} 宽 {w:.2f} 超出可用宽度 {wmax:.2f}")
+        r = draw_box(ax, fig, cx, cy, lines, fc, ec, pad_x=pad_x, pad_y=pad_y)
         boxes.append((name, r))
         return r
-
-    CXL, CXR = 32, 118
-    boot = put(CXL, 78, ["ST_BOOT", "开机动画 100 帧 / 2 s"], "#f2f2f2", "#777", "ST_BOOT")
-    mode = put(CXL, 60, ["ST_MODE", "模式选择页"], "#eaf2fb", "#2c6fbb", "ST_MODE")
-    demo = put(CXL, 42, ["ST_DEMO_MENU", "演示样本列表（可滚动）"],
-               "#eef7ee", "#27803f", "ST_DEMO_MENU")
-    play = put(CXL, 24, ["ST_PLAY", "监测页（与报警页共用版式）"],
-               "#eef7ee", "#27803f", "ST_PLAY")
-    alarm = put(CXL, 7, ["ST_ALARM", "报警页（锁存，触摸确认）"],
-                "#fdeeee", "#c0392b", "ST_ALARM")
-    settings = put(CXR, 78, ["ST_SETTINGS", "语言 / 亮度（NVS 持久化）"],
-                   "#f4eefb", "#7d3cbb", "ST_SETTINGS")
-    live = put(CXR, 60, ["ST_REALTIME", "实时模式（前端待接入）"],
-               "#f2f2f2", "#777", "ST_REALTIME")
-
-    def er(r): return (r[0] + r[2], r[1] + r[3] / 2)
-    def el(r): return (r[0], r[1] + r[3] / 2)
-    def et(r): return (r[0] + r[2] / 2, r[1] + r[3])
-    def eb(r): return (r[0] + r[2] / 2, r[1])
 
     def arrow(pts, color="#444", ls="-"):
         for a, b in zip(pts[:-1], pts[1:]):
@@ -566,153 +713,178 @@ def fig_state_machine():
             for nm, rect in boxes:
                 if seg_hits_rect(a, b, rect):
                     PROBLEMS.append(f"图5: 连线 {a}->{b} 穿过方框 {nm}")
+            segs.append((a, b))
         for a, b in zip(pts[:-1], pts[1:]):
-            ax.plot([a[0], b[0]], [a[1], b[1]], color=color, lw=1.1, ls=ls,
+            if a == b:
+                continue
+            ax.plot([a[0], b[0]], [a[1], b[1]], color=color, lw=lw_line, ls=ls,
                     zorder=4, solid_capstyle="butt")
         ax.add_patch(FancyArrowPatch(pts[-2], pts[-1], arrowstyle="-|>",
-                                     mutation_scale=11, linewidth=1.1,
+                                     mutation_scale=11, linewidth=lw_line,
                                      color=color, linestyle=ls, zorder=4))
 
-    # 主干（单列竖直推进）
-    arrow([eb(boot), et(mode)])
-    arrow([eb(mode), et(demo)])
-    arrow([eb(demo), et(play)])
-    arrow([eb(play), et(alarm)])
+    def er(r): return (r[0] + r[2], r[1] + r[3] / 2)
+    def el(r): return (r[0], r[1] + r[3] / 2)
+    def et(r): return (r[0] + r[2] / 2, r[1] + r[3])
+    def eb(r): return (r[0] + r[2] / 2, r[1])
 
-    # 右侧分支
-    arrow([er(mode), el(live)])                                   # 实时模式
-    x_elbow = er(mode)[0] + 34
-    arrow([er(mode), (x_elbow, er(mode)[1]), (x_elbow, er(settings)[1]), el(settings)])
+    ty = Y - 3.4
+    lc.text(X / 2, ty, "端侧固件状态机（单 app_main 大循环，20 ms tick 驱动）",
+            ha="center", va="center", color=C_TEXT)
 
-    # 回流：报警页 → 演示列表（走最右走廊，再沿 y=demo 中线折回）
-    x_ret = 156.0
-    arrow([er(alarm), (x_ret, er(alarm)[1]), (x_ret, er(demo)[1]), er(demo)],
-          color="#c0392b", ls="--")
+    # 主干两行三列（左→右、再折回），右侧上下挂两个分支，底部为回流走廊
+    y1, y2 = 66.0, 38.0
+    C1, C2 = 54.0, 20.0                      # 两条横向走廊
+    # 每个框的水平区间（按实测文字宽度预留，保证不重叠、不越界）
+    spans = {"ST_BOOT": (2.0, 25.5), "ST_MODE": (30.0, 52.0), "ST_DEMO_MENU": (56.5, 89.0),
+             "ST_PLAY": (26.0, 45.0), "ST_ALARM": (48.0, 77.0),
+             "ST_SETTINGS": (114.0, 150.0), "ST_REALTIME": (114.0, 150.0)}
 
-    # 标签（全部置于方框之间的空隙，逐一校验）
-    lc.add(ax.text(34, 68.5, "开机完成", ha="left", va="center", fontsize=8.5,
-                   color="#333", zorder=6))
-    lc.add(ax.text(34, 50.5, "演示模式", ha="left", va="center", fontsize=8.5,
-                   color="#333", zorder=6))
-    lc.add(ax.text(34, 32.5, "开始回放", ha="left", va="center", fontsize=8.5,
-                   color="#333", zorder=6))
-    lc.add(ax.text(34, 14.5, "心率越界", ha="left", va="center", fontsize=8.5,
-                   color="#333", zorder=6))
-    lc.add(ax.text(76, 61.5, "实时模式", ha="center", va="bottom", fontsize=8.5,
-                   color="#333", zorder=6))
-    lc.add(ax.text(x_elbow + 1.5, 69.0, "设置", ha="left", va="center", fontsize=8.5,
-                   color="#333", zorder=6))
-    lc.add(ax.text(96, 3.2, "触摸确认 → 停止回放并返回列表", ha="center", va="center",
-                   fontsize=8.5, color="#c0392b", zorder=6))
-    lc.report()
+    def box(name, cy, lines, fc, ec):
+        x0, x1 = spans[name]
+        return put((x0 + x1) / 2, cy, lines, fc, ec, name, wmax=x1 - x0)
 
-    ax.text(82, 90, "端侧固件状态机（单 app_main 大循环，20 ms tick 驱动）",
-            ha="center", fontsize=11, color="#333", zorder=5)
-    fig.subplots_adjust(left=0.01, right=0.99, top=0.97, bottom=0.02)
+    boot = box("ST_BOOT", y1, ["ST_BOOT", "开机动画 2 s"], FC_GRAY, C_GRAY)
+    mode = box("ST_MODE", y1, ["ST_MODE", "模式选择页"], FC_BLUE, C_BLUE)
+    demo = box("ST_DEMO_MENU", y1, ["ST_DEMO_MENU", "演示样本列表"], FC_GREEN, C_GREEN)
+    play = box("ST_PLAY", y2, ["ST_PLAY", "监测页"], FC_GREEN, C_GREEN)
+    alarm = box("ST_ALARM", y2, ["ST_ALARM", "报警页（锁存）"], FC_RED, C_RED)
+    settings = box("ST_SETTINGS", y1, ["ST_SETTINGS", "语言 / 亮度（NVS）"],
+                   FC_PURPLE, C_PURPLE)
+    realtime = box("ST_REALTIME", y2, ["ST_REALTIME", "实时模式（待接入）"],
+                   FC_GRAY, C_GRAY)
+
+    # 主干推进：ST_BOOT → ST_MODE → ST_DEMO_MENU → ST_PLAY → ST_ALARM
+    arrow([er(boot), el(mode)])
+    arrow([er(mode), el(demo)])
+    arrow([eb(demo), (eb(demo)[0], C1), (eb(play)[0], C1), et(play)])
+    arrow([er(play), el(alarm)])
+    lc.text((er(boot)[0] + el(mode)[0]) / 2, et(boot)[1] + 1.6, "开机完成",
+            ha="center", va="bottom", color=C_MUTED)
+    lc.text((er(mode)[0] + el(demo)[0]) / 2, et(mode)[1] + 1.6, "演示模式",
+            ha="center", va="bottom", color=C_MUTED)
+    lc.text(78.0, C1 - 4.0, "开始回放", ha="center", va="center", color=C_MUTED)
+    lc.text((er(play)[0] + el(alarm)[0]) / 2, et(play)[1] + 1.6, "心率越界",
+            ha="center", va="bottom", color=C_RED)
+
+    # 分支：设置（右上）与实时模式（右下），走廊分别走 C1 与 C2
+    arrow([eb(boot), (eb(boot)[0], C1), (eb(settings)[0], C1), eb(settings)])
+    lc.text(eb(settings)[0], et(settings)[1] + 3.4, "设置",
+            ha="center", va="center", color=C_MUTED)
+    arrow([eb(alarm), (eb(alarm)[0], C2), (eb(realtime)[0], C2), eb(realtime)])
+    lc.text(eb(realtime)[0], et(realtime)[1] + 3.4, "实时模式",
+            ha="center", va="center", color=C_MUTED)
+
+    # 回流：报警页 → 演示列表（从报警页右边引出，经 x=100 竖廊兜回演示列表底部）
+    # 回流：报警页 → 演示列表（从报警页右边引出，绕最右侧竖廊与底部走廊回演示列表）
+    arrow([er(alarm), (104.0, er(alarm)[1]), (104.0, 1.5),
+           (91.5, 1.5), (91.5, eb(demo)[1] - 2.0)],
+          color=C_RED, ls="--")
+    lc.text(55.0, 16.0, "触摸确认 → 停止回放并返回列表",
+            ha="center", va="center", color=C_RED)
+
+    check_no_overlap("图5", boxes)
+    check_boxes_inside(ax, "图5", boxes, (0, X), (0, Y))
+    lc.check(boxes=boxes, segs=segs)
     check_text_inside_figure(fig, "图5")
-    fig.savefig(OUT / "fig5_state_machine.png")
-    plt.close(fig)
-    print("图5 ->", OUT / "fig5_state_machine.png")
+    font_check_boxes(fig, "图5", ["端侧固件状态机（单 app_main 大循环，20 ms tick 驱动）",
+                                  "ST_BOOT", "开机动画 2 s", "ST_MODE", "模式选择页",
+                                  "ST_DEMO_MENU", "演示样本列表", "ST_PLAY", "监测页",
+                                  "ST_ALARM", "报警页（锁存）", "ST_SETTINGS",
+                                  "语言 / 亮度（NVS）", "ST_REALTIME",
+                                  "实时模式（待接入）", "开机完成", "演示模式",
+                                  "开始回放", "心率越界", "设置", "实时模式",
+                                  "触摸确认 → 停止回放并返回列表"])
+    save_exact(fig, OUT / "fig5_state_machine.png", *FIG5_PX)
+    return boxes
 
 
 # ---------------------------------------------------------------------------
-# 图6 因果流式时序
+# 图6 因果流式处理时序（15.00 cm × 6.14 cm → 1760 × 720 px）
 # ---------------------------------------------------------------------------
+FIG6_W_CM, FIG6_H_CM, FIG6_PX = 15.00, 6.14, (1760, 720)
+
+
 def fig_streaming_timing():
-    """因果流式时序：共享时间轴的双泳道图。
-
-    泳道A（绿）心率/报警 —— 每个 R 峰确认即更新，无延迟；
-    泳道B（红）逐拍分类 —— 每拍的类别在下一拍 R(k+1) 时刻才输出。
-    两条泳道共用同一时间轴，因此「延迟一拍」在图上直接可读。
-    """
-    peaks = [1.7, 3.6, 5.5, 7.4, 9.3]
-    segs = []          # 连线，用于文字压线检测
-    texts = []         # 自由文字，用于重叠检测
-
-    fig, ax = plt.subplots(figsize=(8.8, 3.6), dpi=200)
-    ax.set_xlim(0, 11.5); ax.set_ylim(0, 8.6); ax.axis("off")
+    """共享时间轴的双泳道图：泳道 A 心率/报警（立即），泳道 B 逐拍分类（晚一拍）。"""
+    fig = plt.figure(figsize=(FIG6_W_CM / 2.54, FIG6_H_CM / 2.54),
+                     dpi=FIG6_PX[0] / (FIG6_W_CM / 2.54))
+    ax = fig.add_axes((0, 0, 1, 1))
+    X, Y = FIG6_W_CM * 10, FIG6_H_CM * 10              # 数据坐标 = 0.1 cm
+    ax.set_xlim(0, X); ax.set_ylim(0, Y); ax.axis("off")
+    segs = []
+    lc = FreeText(ax, fig, "图6")
 
     def line(x1, y1, x2, y2, **kw):
         ax.plot([x1, x2], [y1, y2], **kw)
         segs.append(((x1, y1), (x2, y2)))
 
-    def note(x, y, s, **kw):
-        t = ax.text(x, y, s, **kw)
-        texts.append((s, t))
-        return t
+    peaks = [18.0, 42.0, 66.0, 90.0, 114.0]
+    X0, X1 = 6.0, 112.0
+    y_time, y_cls, y_hr = 12.0, 28.0, 38.0
 
-    GREEN, RED, BLUE, GRAY = "#27803f", "#c0392b", "#2c6fbb", "#9aa0a6"
-    X0, X1 = 0.6, 10.8
+    # 顶部图例（与泳道同色）
+    lc.text(X0, 57.5, "绿色：心率 / 报警 —— R 峰确认即更新", ha="left", va="center", color=C_GREEN)
+    lc.text(X0, 51.5, "红色：逐拍分类 —— 需 post-RR，晚 R(k+1) 一拍输出",
+            ha="left", va="center", color=C_RED)
 
-    # ---- 顶部说明（颜色与泳道一致）----
-    note(0.4, 8.15, "绿色箭头：心率 / 报警 —— R 峰确认即更新（不延迟）",
-         ha="left", va="center", fontsize=9.5, color=GREEN)
-    note(0.4, 7.55, "红色线段：逐拍分类 —— 需 post-RR，故晚 R(k+1) 一拍输出",
-         ha="left", va="center", fontsize=9.5, color=RED)
+    # 泳道 A：心率 / 报警（R 峰确认即更新）
+    line(X0, y_hr, X1, y_hr, color="#9aa0a6", lw=1.0)
+    for i, x in enumerate(peaks):
+        line(x, y_hr, x, y_hr + 6.0, color=C_GREEN, lw=1.4)
+        ax.add_patch(FancyArrowPatch((x, y_hr + 5.4), (x, y_hr + 6.1), arrowstyle="-|>",
+                                     mutation_scale=10, lw=1.4, color=C_GREEN, zorder=4))
+        lc.text(x, y_hr + 9.0, f"HR{i + 1}", ha="center", va="center", color=C_GREEN)
 
-    # ---- 泳道A：心率 / 报警 ----
-    line(X0, 5.6, X1, 5.6, color=GRAY, lw=1.0)
-    for i, t in enumerate(peaks):
-        line(t, 5.6, t, 6.5, color=GREEN, lw=1.4)
-        ax.add_patch(FancyArrowPatch((t, 6.30), (t, 6.52), arrowstyle="-|>",
-                                     mutation_scale=10, lw=1.4, color=GREEN, zorder=4))
-        note(t, 6.82, f"HR{i+1}", ha="center", va="center", fontsize=9, color=GREEN)
-
-    # ---- 泳道B：逐拍分类（每段 = 该拍类别的输出区间）----
-    line(X0, 2.95, X1, 2.95, color=GRAY, lw=1.0)
+    # 泳道 B：逐拍分类（每段 = 该拍类别的输出区间；首拍无输出）
+    line(X0, y_cls, X1, y_cls, color="#9aa0a6", lw=1.0)
     for k in range(len(peaks) - 1):
-        a, b = peaks[k + 1], peaks[k + 2] if k + 2 < len(peaks) else peaks[k + 1] + 1.9
-        line(a, 2.95, b, 2.95, color=RED, lw=2.6)
-        note((a + b) / 2, 2.62, f"class(R{k+1})", ha="center", va="top",
-             fontsize=9, color=RED)
-    note(0.7, 3.30, "首拍无输出", ha="left", va="center", fontsize=8.5, color=GRAY)
+        a = peaks[k + 1]
+        b = peaks[k + 2] if k + 2 < len(peaks) else peaks[k + 1] + 22.0
+        line(a, y_cls, b, y_cls, color=C_RED, lw=2.6)
+        lc.text((a + b) / 2, y_cls - 2.6, f"class(R{k + 1})", ha="center",
+                va="top", color=C_RED)
 
-    # ---- 泳道之间的空白处：用一条直虚线示意「延迟一拍」 ----
-    # 从 R1 时刻（检测到该拍）指向 class(R1) 的输出时刻 R2，语义与图注一致。
-    line(peaks[0] + 0.05, 5.52, peaks[1] - 0.06, 3.02,
+    # 「延迟一拍」示意：R1 确认时刻 → class(R1) 的输出时刻 R2（"晚一拍"已在图例说明）
+    line(peaks[0] + 0.8, y_hr - 0.8, peaks[1] - 1.0, y_cls + 0.8,
          color="#7f8c8d", lw=1.2, ls="--")
-    ax.add_patch(FancyArrowPatch((peaks[1] - 0.18, 3.02), (peaks[1] - 0.04, 3.02),
+    ax.add_patch(FancyArrowPatch((peaks[1] - 2.2, y_cls + 0.6), (peaks[1] - 0.9, y_cls + 0.6),
                                  arrowstyle="-|>", mutation_scale=11, lw=1.2,
                                  color="#7f8c8d", linestyle="--", zorder=4))
-    note(1.0, 4.30, "延迟 1 拍", ha="left", va="center", fontsize=9, color="#5d6d7e")
+    lc.text(3.0, y_cls + 3.6, "首拍无输出", ha="left", va="center", color="#7f8c8d")
+    lc.text(24.0, 16.2, "延迟 1 拍", ha="left", va="center", color="#5d6d7e")
 
-    # ---- 底部时间轴：R 峰刻度 ----
-    line(X0, 0.95, X1, 0.95, color="#333", lw=1.2)
-    note(X1 + 0.12, 0.95, "时间", ha="left", va="center", fontsize=9, color="#333")
-    for i, t in enumerate(peaks):
-        line(t, 0.95, t, 1.62, color=BLUE, lw=1.2)
-        ax.plot([t], [0.95], marker="v", ms=7, color=BLUE, zorder=4)
-        note(t, 0.52, f"R{i+1}", ha="center", va="top", fontsize=9, color=BLUE)
+    # 底部时间轴：R 峰刻度
+    line(X0, y_time, X1, y_time, color="#333", lw=1.2)
+    lc.text(X1 + 2.0, y_time, "时间", ha="left", va="center", color=C_TEXT)
+    for i, x in enumerate(peaks):
+        line(x, y_time, x, y_time + 4.6, color=C_BLUE, lw=1.2)
+        ax.plot([x], [y_time], marker="v", ms=7, color=C_BLUE, zorder=4)
+        lc.text(x, y_time - 2.8, f"R{i + 1}", ha="center", va="top", color=C_BLUE)
 
-    # ---- 用竖直虚线把「R(k+1) 时刻」与分类输出起点对齐 ----
-    for k in range(len(peaks) - 1):
-        x = peaks[k + 1]
-        line(x, 2.95, x, 1.62, color=BLUE, lw=0.8, ls=":")
-        line(x, 5.6, x, 6.5, color=BLUE, lw=0.8, ls=":")
+    # 用竖直虚线把「R(k+1) 时刻」与分类输出起点对齐
+    for x in peaks[1:]:
+        line(x, y_time + 4.6, x, y_cls, color=C_BLUE, lw=0.8, ls=":")
 
-    # ---- 校验：文字不压线、文字互不重叠、不越界 ----
-    fig.canvas.draw()
-    r = fig.canvas.get_renderer()
-    boxes = []
-    for s, t in texts:
-        bb = t.get_window_extent(renderer=r).transformed(ax.transData.inverted())
-        boxes.append((s, (bb.x0, bb.y0, bb.width, bb.height)))
-    for s, (x0, y0, w, h) in boxes:
-        for a, b in segs:
-            if seg_hits_rect(a, b, (x0, y0, w, h), shrink=0.02):
-                PROBLEMS.append(f"图6: 文字「{s}」被连线穿过")
-    for i in range(len(boxes)):
-        for j in range(i + 1, len(boxes)):
-            n1, r1 = boxes[i]; n2, r2 = boxes[j]
-            if not (r1[0]+r1[2] <= r2[0] or r2[0]+r2[2] <= r1[0] or
-                    r1[1]+r1[3] <= r2[1] or r2[1]+r2[3] <= r1[1]):
-                PROBLEMS.append(f"图6: 文字「{n1}」与「{n2}」重叠")
-
-    fig.subplots_adjust(left=0.015, right=0.985, top=0.97, bottom=0.03)
+    lc.check(segs=segs)
     check_text_inside_figure(fig, "图6")
-    fig.savefig(OUT / "fig6_timing.png")
-    plt.close(fig)
-    print("图6 ->", OUT / "fig6_timing.png")
+    font_check_boxes(fig, "图6", ["绿色：心率 / 报警 —— R 峰确认即更新",
+                                  "红色：逐拍分类 —— 需 post-RR，晚 R(k+1) 一拍输出",
+                                  "HR1", "HR2", "HR3", "HR4", "HR5", "class(R1)", "class(R4)",
+                                  "首拍无输出", "延迟 1 拍", "时间", "R1", "R5"])
+    save_exact(fig, OUT / "fig6_timing.png", *FIG6_PX)
+
+
+# ---------------------------------------------------------------------------
+# 统一自检：字号必须全部为 10.5 pt
+# ---------------------------------------------------------------------------
+def audit_font_sizes():
+    bad = [(s, f) for s, f in FONT_SIZES if abs(f - FS) > 1e-9]
+    uniq = sorted({round(f, 3) for _, f in FONT_SIZES})
+    print(f"\n字号统计：共 {len(FONT_SIZES)} 处文字，出现过的字号 = {uniq}")
+    if bad:
+        for s, f in bad[:20]:
+            PROBLEMS.append(f"字号不统一: 「{s}」= {f} pt（应为 {FS}）")
 
 
 if __name__ == "__main__":
@@ -722,10 +894,11 @@ if __name__ == "__main__":
     fig_gui_screenshot()
     fig_state_machine()
     fig_streaming_timing()
+    audit_font_sizes()
 
     print("\n=== 自动几何校验 ===")
     if PROBLEMS:
         for p in PROBLEMS:
             print("  [问题]", p)
         sys.exit(1)
-    print("  未检出文字越界 / 连线穿框 / 文字裁切 / 方框字")
+    print("  未检出文字越界 / 连线穿框 / 文字裁切 / 文字重叠 / 字号不统一 / 方框字")
